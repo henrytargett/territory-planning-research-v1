@@ -16,11 +16,11 @@ logger = logging.getLogger(__name__)
 
 class ResearchPipeline:
     """Orchestrates the company research process."""
-    
+
     def __init__(self):
         self.search_service = get_search_service()
         self.llm_service = get_llm_service()
-        self._running_jobs: dict[int, bool] = {}  # Track running jobs for cancellation
+        self._running_tasks: dict[int, asyncio.Task] = {}  # Track running tasks for proper cancellation
     
     async def process_company(self, company: Company, db: Session) -> bool:
         """
@@ -125,24 +125,22 @@ class ResearchPipeline:
         company.recommended_action = analysis.get("recommended_action")
     
     async def run_job(
-        self, 
-        job_id: int, 
+        self,
+        job_id: int,
         db_factory: Callable,
         delay_between_companies: float = 1.0
     ):
         """
         Run a complete research job.
-        
+
         Args:
             job_id: ID of the ResearchJob to process
             db_factory: Factory function to create new database sessions
             delay_between_companies: Seconds to wait between companies (rate limiting)
         """
-        self._running_jobs[job_id] = True
-        
         # Get fresh session for the job
         db = db_factory()
-        
+
         try:
             job = db.query(ResearchJob).filter(ResearchJob.id == job_id).first()
             if not job:
@@ -163,13 +161,13 @@ class ResearchPipeline:
             ).all()
             
             for i, company in enumerate(pending_companies):
-                # Check for cancellation
-                if not self._running_jobs.get(job_id, False):
+                # Check if task was cancelled
+                if asyncio.current_task().cancelled():
                     logger.info(f"Job {job_id} cancelled")
                     job.status = JobStatus.CANCELLED.value
                     db.commit()
                     return
-                
+
                 # Process company
                 success = await self.process_company(company, db)
 
@@ -200,7 +198,15 @@ class ResearchPipeline:
             db.commit()
             
             logger.info(f"Job {job_id} completed: {job.completed_companies} successful, {job.failed_companies} failed")
-            
+
+        except asyncio.CancelledError:
+            logger.info(f"Job {job_id} was cancelled")
+            job = db.query(ResearchJob).filter(ResearchJob.id == job_id).first()
+            if job:
+                job.status = JobStatus.CANCELLED.value
+                db.commit()
+            raise  # Re-raise to properly handle cancellation
+
         except Exception as e:
             logger.error(f"Job {job_id} failed: {str(e)}")
             job = db.query(ResearchJob).filter(ResearchJob.id == job_id).first()
@@ -208,14 +214,32 @@ class ResearchPipeline:
                 job.status = JobStatus.FAILED.value
                 db.commit()
         finally:
-            self._running_jobs.pop(job_id, None)
+            self._running_tasks.pop(job_id, None)
             db.close()
     
-    def cancel_job(self, job_id: int):
-        """Cancel a running job."""
-        if job_id in self._running_jobs:
-            self._running_jobs[job_id] = False
+    def register_task(self, job_id: int, task: asyncio.Task):
+        """Register a running task for a job."""
+        self._running_tasks[job_id] = task
+        logger.info(f"Registered task for job {job_id}")
+
+    def cancel_job(self, job_id: int) -> bool:
+        """
+        Cancel a running job.
+
+        Args:
+            job_id: ID of the job to cancel
+
+        Returns:
+            True if cancellation was requested, False if job not found
+        """
+        if job_id in self._running_tasks:
+            task = self._running_tasks[job_id]
+            task.cancel()
             logger.info(f"Cancellation requested for job {job_id}")
+            return True
+        else:
+            logger.warning(f"Cannot cancel job {job_id}: not running")
+            return False
 
 
 # Singleton instance

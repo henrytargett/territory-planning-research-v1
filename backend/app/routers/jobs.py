@@ -17,9 +17,6 @@ from ..services.research import get_research_pipeline
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
-# Store for running tasks
-_running_tasks: dict[int, asyncio.Task] = {}
-
 
 # Pydantic models for API responses
 class CompanyResponse(BaseModel):
@@ -45,7 +42,12 @@ class CompanyResponse(BaseModel):
     priority_tier: Optional[str] = None
     recommended_action: Optional[str] = None
     error_message: Optional[str] = None
-    
+    # Cost tracking fields
+    tavily_credits_used: float = 0.0
+    tavily_response_time: Optional[float] = None
+    llm_tokens_used: int = 0
+    llm_response_time: Optional[float] = None
+
     class Config:
         from_attributes = True
 
@@ -62,7 +64,13 @@ class JobResponse(BaseModel):
     completed_at: Optional[datetime] = None
     original_filename: Optional[str] = None
     submitted_by: Optional[str] = None
-    
+    # Cost tracking fields
+    total_tavily_credits: float = 0.0
+    total_cost_usd: float = 0.0
+    # Health monitoring fields
+    last_activity_at: Optional[datetime] = None
+    stalled: int = 0
+
     class Config:
         from_attributes = True
 
@@ -151,14 +159,15 @@ async def upload_csv(
         
         # Start processing in background
         pipeline = get_research_pipeline()
-        
+
         # Create async task directly in the event loop
         task = asyncio.create_task(
             pipeline.run_job(job.id, lambda: SessionLocal())
         )
-        _running_tasks[job.id] = task
+        # Register task with pipeline for proper cancellation
+        pipeline.register_task(job.id, task)
         logger.info(f"Started background task for job {job.id}")
-        
+
         return job
         
     except UnicodeDecodeError:
@@ -207,9 +216,10 @@ async def lookup_single_company(
     task = asyncio.create_task(
         pipeline.run_job(job.id, lambda: SessionLocal())
     )
-    _running_tasks[job.id] = task
+    # Register task with pipeline for proper cancellation
+    pipeline.register_task(job.id, task)
     logger.info(f"Started single company lookup for: {company_name}")
-    
+
     return job
 
 
@@ -298,9 +308,10 @@ async def start_job(job_id: int, db: Session = Depends(get_db)):
     task = asyncio.create_task(
         pipeline.run_job(job_id, lambda: SessionLocal())
     )
-    _running_tasks[job_id] = task
+    # Register task with pipeline for proper cancellation
+    pipeline.register_task(job_id, task)
     logger.info(f"Manually started job {job_id}")
-    
+
     return {"message": "Job started", "job_id": job_id}
 
 
@@ -310,13 +321,16 @@ async def cancel_job(job_id: int, db: Session = Depends(get_db)):
     job = db.query(ResearchJob).filter(ResearchJob.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     if job.status != JobStatus.RUNNING.value:
         raise HTTPException(status_code=400, detail="Job is not running")
-    
+
     pipeline = get_research_pipeline()
-    pipeline.cancel_job(job_id)
-    
+    cancelled = pipeline.cancel_job(job_id)
+
+    if not cancelled:
+        raise HTTPException(status_code=400, detail="Job task not found - may have just completed")
+
     return {"message": "Cancellation requested", "job_id": job_id}
 
 
