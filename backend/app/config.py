@@ -7,22 +7,36 @@ import os
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
-    
+
     # Crusoe Cloud API
     crusoe_api_key: str
     crusoe_api_base_url: str = "https://api.crusoe.ai/v1/"
     crusoe_model: str = "meta-llama/Llama-3.3-70B-Instruct"
-    
+
     # Tavily Search API
     tavily_api_key: str
-    
+
     # Database
     database_url: str = "sqlite:///./data/territory_planner.db"
-    
+
     # App Settings
     app_env: str = "development"
     log_level: str = "INFO"
-    
+
+    # API Timeouts (seconds) - can be overridden via environment variables
+    tavily_timeout: float = 30.0
+    llm_timeout: float = 60.0
+
+    # Retry Configuration
+    max_retries: int = 3
+    retry_base_delay: float = 2.0
+
+    # Rate Limiting
+    delay_between_companies: float = 1.0
+
+    # Job Health Monitoring
+    job_stall_threshold: int = 300  # Seconds
+
     model_config = {
         "env_file": ["../.env", ".env"],  # Check parent dir first, then current
         "env_file_encoding": "utf-8",

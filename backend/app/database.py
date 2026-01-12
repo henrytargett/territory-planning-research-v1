@@ -29,18 +29,49 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def init_db():
     """Initialize database tables and run migrations."""
     Base.metadata.create_all(bind=engine)
-    
-    # Migration: Add submitted_by column if it doesn't exist
+
     try:
         inspector = inspect(engine)
-        columns = [col['name'] for col in inspector.get_columns('research_jobs')]
-        
-        if 'submitted_by' not in columns:
-            logger.info("Adding submitted_by column to research_jobs table...")
+
+        # Migrate research_jobs table
+        job_columns = {col['name']: col for col in inspector.get_columns('research_jobs')}
+
+        migrations = []
+        if 'submitted_by' not in job_columns:
+            migrations.append("ALTER TABLE research_jobs ADD COLUMN submitted_by VARCHAR(100)")
+        if 'total_tavily_credits' not in job_columns:
+            migrations.append("ALTER TABLE research_jobs ADD COLUMN total_tavily_credits FLOAT DEFAULT 0.0")
+        if 'total_cost_usd' not in job_columns:
+            migrations.append("ALTER TABLE research_jobs ADD COLUMN total_cost_usd FLOAT DEFAULT 0.0")
+        if 'last_activity_at' not in job_columns:
+            migrations.append("ALTER TABLE research_jobs ADD COLUMN last_activity_at DATETIME")
+        if 'stalled' not in job_columns:
+            migrations.append("ALTER TABLE research_jobs ADD COLUMN stalled INTEGER DEFAULT 0")
+
+        # Migrate companies table
+        company_columns = {col['name']: col for col in inspector.get_columns('companies')}
+
+        if 'tavily_credits_used' not in company_columns:
+            migrations.append("ALTER TABLE companies ADD COLUMN tavily_credits_used FLOAT DEFAULT 0.0")
+        if 'tavily_response_time' not in company_columns:
+            migrations.append("ALTER TABLE companies ADD COLUMN tavily_response_time FLOAT")
+        if 'llm_tokens_used' not in company_columns:
+            migrations.append("ALTER TABLE companies ADD COLUMN llm_tokens_used INTEGER DEFAULT 0")
+        if 'llm_response_time' not in company_columns:
+            migrations.append("ALTER TABLE companies ADD COLUMN llm_response_time FLOAT")
+
+        # Execute migrations
+        if migrations:
+            logger.info(f"Running {len(migrations)} database migrations...")
             with engine.connect() as conn:
-                conn.execute(text("ALTER TABLE research_jobs ADD COLUMN submitted_by VARCHAR(100)"))
+                for migration in migrations:
+                    logger.info(f"  - {migration}")
+                    conn.execute(text(migration))
                 conn.commit()
-            logger.info("Migration complete: submitted_by column added")
+            logger.info("All migrations complete")
+        else:
+            logger.info("Database schema is up to date")
+
     except Exception as e:
         logger.warning(f"Migration check failed (this is OK for new databases): {e}")
 

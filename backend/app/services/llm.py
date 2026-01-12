@@ -1,11 +1,14 @@
 """Crusoe Cloud LLM service for company analysis."""
 
+import time
+import asyncio
 from openai import OpenAI
 from typing import Optional
 import json
 import logging
 
 from ..config import get_settings
+from ..utils import retry_with_backoff
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -176,26 +179,22 @@ class LLMService:
         )
         self.model = settings.crusoe_model
     
-    async def analyze_company(self, company_name: str, search_results: str) -> dict:
+    async def _perform_analysis(self, company_name: str, prompt: str) -> dict:
         """
-        Analyze a company based on search results.
-        
+        Internal method to perform LLM analysis (with retry support).
+
         Args:
             company_name: Name of the company
-            search_results: Formatted search results string
-            
+            prompt: Formatted prompt string
+
         Returns:
-            dict with structured analysis
+            LLM API response
+
+        Raises:
+            Exception: If the analysis fails
         """
-        prompt = ANALYSIS_PROMPT_TEMPLATE.format(
-            company_name=company_name,
-            search_results=search_results,
-        )
-        
-        try:
-            logger.info(f"Analyzing company: {company_name}")
-            
-            response = self.client.chat.completions.create(
+        def sync_analyze():
+            return self.client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
@@ -203,11 +202,52 @@ class LLMService:
                 ],
                 temperature=0.3,  # Lower temperature for more consistent output
                 top_p=0.9,
+                timeout=settings.llm_timeout,  # Add timeout
             )
+
+        # Run in thread pool to avoid blocking event loop
+        return await asyncio.to_thread(sync_analyze)
+
+    async def analyze_company(self, company_name: str, search_results: str) -> dict:
+        """
+        Analyze a company based on search results with retry logic and usage tracking.
+
+        Args:
+            company_name: Name of the company
+            search_results: Formatted search results string
+
+        Returns:
+            dict with structured analysis, usage stats, and timing information
+        """
+        prompt = ANALYSIS_PROMPT_TEMPLATE.format(
+            company_name=company_name,
+            search_results=search_results,
+        )
+
+        try:
+            logger.info(f"Analyzing company: {company_name}")
+            start_time = time.time()
+
+            # Perform analysis with retry logic
+            response = await retry_with_backoff(
+                self._perform_analysis,
+                company_name,
+                prompt,
+                max_retries=settings.max_retries,
+                base_delay=settings.retry_base_delay,
+                exceptions=(Exception,),
+            )
+
+            response_time = time.time() - start_time
+
+            # Extract token usage
+            tokens_used = 0
+            if hasattr(response, 'usage') and response.usage:
+                tokens_used = response.usage.total_tokens or 0
             
             response_text = response.choices[0].message.content.strip()
             logger.debug(f"LLM response for {company_name}: {response_text[:200]}...")
-            
+
             # Parse JSON response
             try:
                 # Try to extract JSON if there's extra text
@@ -221,9 +261,9 @@ class LLMService:
                         json_str = response_text[start:end]
                     else:
                         raise ValueError("No JSON found in response")
-                
+
                 analysis = json.loads(json_str)
-                
+
                 # Calculate total score
                 scores = analysis.get("scores", {})
                 total_score = (
@@ -233,11 +273,11 @@ class LLMService:
                     scores.get("confidence", 0)
                 )
                 analysis["scores"]["total"] = total_score
-                
+
                 # Normalize timing_urgency to growth_signals if old format
                 if "timing_urgency" in scores and "growth_signals" not in scores:
                     scores["growth_signals"] = scores.pop("timing_urgency")
-                
+
                 # Determine priority tier (adjusted for new max of 100)
                 # HOT: 75+ (strong GPU use case + decent funding)
                 # WARM: 55-74 (moderate GPU needs or high funding with some GPU need)
@@ -255,16 +295,21 @@ class LLMService:
                 else:
                     priority_tier = "COLD"
                     recommended_action = "Low priority - likely using third-party APIs, minimal GPU needs"
-                
+
                 analysis["priority_tier"] = priority_tier
                 analysis["recommended_action"] = recommended_action
                 analysis["success"] = True
                 analysis["raw_response"] = response_text
-                
-                logger.info(f"Analysis complete for {company_name}: {priority_tier} ({total_score} points)")
-                
+                analysis["tokens_used"] = tokens_used
+                analysis["response_time"] = response_time
+
+                logger.info(
+                    f"Analysis complete for {company_name}: {priority_tier} ({total_score} points, "
+                    f"tokens: {tokens_used}, time: {response_time:.2f}s)"
+                )
+
                 return analysis
-                
+
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse LLM response for {company_name}: {e}")
                 return {
@@ -272,14 +317,18 @@ class LLMService:
                     "error": f"Failed to parse LLM response: {e}",
                     "raw_response": response_text,
                     "company_name": company_name,
+                    "tokens_used": tokens_used,
+                    "response_time": response_time,
                 }
-                
+
         except Exception as e:
-            logger.error(f"LLM analysis failed for {company_name}: {str(e)}")
+            logger.error(f"LLM analysis failed for {company_name} after {settings.max_retries} retries: {str(e)}")
             return {
                 "success": False,
                 "error": str(e),
                 "company_name": company_name,
+                "tokens_used": 0,
+                "response_time": 0.0,
             }
 
 

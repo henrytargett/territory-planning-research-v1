@@ -43,26 +43,34 @@ class ResearchPipeline:
             # Step 1: Search for company information
             search_results = await self.search_service.search_company(company.name)
             company.search_results_raw = json.dumps(search_results.get("raw_response", {}))
-            
+
+            # Store Tavily cost data
+            company.tavily_credits_used = search_results.get("credits_used", 0.0)
+            company.tavily_response_time = search_results.get("response_time")
+
             if not search_results.get("success"):
                 company.status = CompanyStatus.FAILED.value
                 company.error_message = f"Search failed: {search_results.get('error', 'Unknown error')}"
                 db.commit()
                 return False
-            
+
             # Step 2: Format search results for LLM
             formatted_results = self.search_service.format_search_results_for_llm(search_results)
-            
+
             # Step 3: Analyze with LLM
             analysis = await self.llm_service.analyze_company(company.name, formatted_results)
             company.llm_response_raw = analysis.get("raw_response", "")
-            
+
+            # Store LLM usage data
+            company.llm_tokens_used = analysis.get("tokens_used", 0)
+            company.llm_response_time = analysis.get("response_time")
+
             if not analysis.get("success"):
                 company.status = CompanyStatus.FAILED.value
                 company.error_message = f"Analysis failed: {analysis.get('error', 'Unknown error')}"
                 db.commit()
                 return False
-            
+
             # Step 4: Store results
             self._store_analysis_results(company, analysis)
             company.status = CompanyStatus.COMPLETED.value
@@ -164,14 +172,24 @@ class ResearchPipeline:
                 
                 # Process company
                 success = await self.process_company(company, db)
-                
-                # Update job progress
+
+                # Update job progress and health monitoring
                 if success:
                     job.completed_companies += 1
+                    # Aggregate Tavily credits
+                    job.total_tavily_credits += company.tavily_credits_used or 0.0
                 else:
                     job.failed_companies += 1
+
+                # Update health monitoring
+                job.last_activity_at = datetime.utcnow()
+
+                # Calculate estimated total cost
+                from ..utils import estimate_tavily_cost
+                job.total_cost_usd = estimate_tavily_cost(job.total_tavily_credits)
+
                 db.commit()
-                
+
                 # Rate limiting delay
                 if i < len(pending_companies) - 1:
                     await asyncio.sleep(delay_between_companies)

@@ -2,13 +2,16 @@ version: '3.8'
 
 services:
   backend:
-    build: 
+    build:
       context: ../backend
       dockerfile: Dockerfile
     container_name: territory-planner-backend
     restart: always
     volumes:
-      - app-data:/app/data
+      # IMPORTANT: Mount persistent disk for database storage
+      # Replace /mnt/data/territory-planner/database with your actual persistent disk path
+      # If using ephemeral storage (development only), comment this line and uncomment: # - app-data:/app/data
+      - /mnt/data/territory-planner/database:/app/data
       - ../.env:/app/.env:ro
     environment:
       - APP_ENV=production

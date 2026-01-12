@@ -1,31 +1,57 @@
 """Main FastAPI application for Territory Planner."""
 
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import init_db
 from .routers import jobs
 from .config import get_settings
+from .constants import CORS_ALLOWED_ORIGINS
+
+# Get settings
+settings = get_settings()
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, settings.log_level.upper()),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown events."""
+    # Startup
+    logger.info("Starting Territory Planner...")
+    logger.info("Initializing database...")
+    init_db()
+    logger.info("Database initialized")
+    logger.info(f"Environment: {settings.app_env}")
+    logger.info(f"Using LLM model: {settings.crusoe_model}")
+    logger.info(f"LLM timeout: {settings.llm_timeout}s")
+    logger.info(f"Tavily timeout: {settings.tavily_timeout}s")
+
+    yield
+
+    # Shutdown
+    logger.info("Shutting down Territory Planner...")
+
 
 # Create FastAPI app
 app = FastAPI(
     title="Territory Planner",
     description="AI-powered company research and ranking for GPU infrastructure sales",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
-# CORS middleware for frontend
+# CORS middleware for frontend (security fix: removed wildcard)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173", "*"],
+    allow_origins=CORS_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -33,18 +59,6 @@ app.add_middleware(
 
 # Include routers
 app.include_router(jobs.router, prefix="/api")
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database on startup."""
-    logger.info("Initializing database...")
-    init_db()
-    logger.info("Database initialized")
-    
-    settings = get_settings()
-    logger.info(f"Environment: {settings.app_env}")
-    logger.info(f"Using model: {settings.crusoe_model}")
 
 
 @app.get("/")

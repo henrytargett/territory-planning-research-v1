@@ -48,27 +48,35 @@ class PriorityTier(str, enum.Enum):
 class ResearchJob(Base):
     """A batch research job from an uploaded CSV."""
     __tablename__ = "research_jobs"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=True)
-    status = Column(String(50), default=JobStatus.PENDING.value)
-    
+    status = Column(String(50), default=JobStatus.PENDING.value, index=True)
+
     # Progress tracking
     total_companies = Column(Integer, default=0)
     completed_companies = Column(Integer, default=0)
     failed_companies = Column(Integer, default=0)
-    
+
+    # Cost tracking
+    total_tavily_credits = Column(Float, default=0.0)  # Total Tavily API credits used
+    total_cost_usd = Column(Float, default=0.0)        # Estimated total cost in USD
+
+    # Health monitoring
+    last_activity_at = Column(DateTime, nullable=True)  # Last time a company was processed
+    stalled = Column(Integer, default=0)                # Boolean flag for stalled jobs
+
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
-    
+
     # Original CSV filename
     original_filename = Column(String(255), nullable=True)
-    
+
     # User tracking
-    submitted_by = Column(String(100), nullable=True)  # Name/identifier of who submitted
-    
+    submitted_by = Column(String(100), nullable=True, index=True)  # Name/identifier of who submitted
+
     # Relationships
     companies = relationship("Company", back_populates="job", cascade="all, delete-orphan")
 
@@ -117,17 +125,23 @@ class Company(Base):
     score_total = Column(Integer, default=0)
     
     # Final classification
-    priority_tier = Column(String(20), nullable=True)
+    priority_tier = Column(String(20), nullable=True, index=True)
     recommended_action = Column(Text, nullable=True)
-    
+
+    # Cost tracking
+    tavily_credits_used = Column(Float, default=0.0)     # Tavily API credits for this company
+    tavily_response_time = Column(Float, nullable=True)  # Response time in seconds
+    llm_tokens_used = Column(Integer, default=0)         # LLM tokens consumed
+    llm_response_time = Column(Float, nullable=True)     # LLM response time in seconds
+
     # Raw data storage
     search_results_raw = Column(Text, nullable=True)  # Raw Tavily response
     llm_response_raw = Column(Text, nullable=True)    # Raw LLM response
-    
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     researched_at = Column(DateTime, nullable=True)
-    
+
     # Relationships
     job = relationship("ResearchJob", back_populates="companies")
 
