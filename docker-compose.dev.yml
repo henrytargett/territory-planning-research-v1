@@ -1,0 +1,21 @@
+version: '3.8'
+
+# Development docker-compose - only runs backend
+# Frontend is run with npm run dev for hot reloading
+
+services:
+  backend:
+    build: ./backend
+    container_name: territory-planner-backend-dev
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - ./data:/app/data
+      - ./.env:/app/.env:ro
+    environment:
+      - APP_ENV=development
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+
+
