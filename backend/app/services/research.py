@@ -178,13 +178,29 @@ class ResearchPipeline:
                 settings = get_settings()
                 
                 try:
-                    # Check cache first if caching is enabled
-                    if settings.enable_tavily_caching and company.tavily_data_cached and company.tavily_data_verified:
-                        logger.info(f"💾 Cache HIT: {company.name} (saved $0.016, ~3s)")
-                        # Use cached data
-                        if company.tavily_formatted_results:
+                    # Check cache first if caching is enabled (cross-job lookup by name)
+                    if settings.enable_tavily_caching:
+                        cached_company = db.query(Company).filter(
+                            Company.name == company.name,
+                            Company.tavily_data_cached == True,
+                            Company.tavily_data_verified == True,
+                            Company.tavily_formatted_results != None
+                        ).order_by(Company.tavily_cached_at.desc()).first()
+                        
+                        if cached_company:
+                            logger.info(f"💾 Cache HIT: {company.name} (saved $0.016, ~3s)")
+                            # Copy cached data to current company
                             company.status = CompanyStatus.RESEARCHING.value
-                            return company, company.tavily_formatted_results, None
+                            company.tavily_data_cached = True
+                            company.tavily_data_verified = True
+                            company.tavily_formatted_results = cached_company.tavily_formatted_results
+                            company.tavily_validation_message = cached_company.tavily_validation_message
+                            company.tavily_cached_at = cached_company.tavily_cached_at
+                            # Don't charge for cached data
+                            company.tavily_credits_used = 0.0
+                            company.tavily_response_time = 0.0
+                            db.commit()
+                            return company, cached_company.tavily_formatted_results, None
                     
                     # Cache miss - fetch from Tavily
                     company.status = CompanyStatus.RESEARCHING.value
@@ -274,15 +290,15 @@ class ResearchPipeline:
             
             phase1_duration = (datetime.utcnow() - phase1_start).total_seconds()
             
-            # Calculate cache statistics
-            cache_hits = sum(1 for c in pending_companies if c.tavily_data_cached and c.tavily_data_verified)
+            # Calculate cache statistics (count companies with zero Tavily credits = cache hits)
+            cache_hits = sum(1 for c in pending_companies if (c.tavily_credits_used or 0) == 0)
             cache_misses = total - cache_hits
             cost_saved = cache_hits * 0.016
             
             logger.info(
                 f"PHASE 1 complete in {phase1_duration:.1f}s - "
                 f"Cache: {cache_hits} hits, {cache_misses} misses "
-                f"(saved ${cost_saved:.2f})"
+                f"(saved ${cost_saved:.3f})"
             )
             
             # ============================================================
