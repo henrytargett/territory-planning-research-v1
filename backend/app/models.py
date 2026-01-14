@@ -1,6 +1,6 @@
 """Database models for the Territory Planner app."""
 
-from sqlalchemy import Column, Integer, String, Float, Text, DateTime, Enum, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, Float, Text, DateTime, Enum, ForeignKey, JSON, Boolean
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime
 import enum
