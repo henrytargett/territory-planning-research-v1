@@ -137,6 +137,13 @@ class Company(Base):
     # Raw data storage
     search_results_raw = Column(Text, nullable=True)  # Raw Tavily response
     llm_response_raw = Column(Text, nullable=True)    # Raw LLM response
+    
+    # Tavily data caching & verification
+    tavily_data_cached = Column(Boolean, default=False)  # Whether Tavily data is cached
+    tavily_data_verified = Column(Boolean, default=False)  # Whether data passed validation
+    tavily_cached_at = Column(DateTime, nullable=True)  # When Tavily data was cached
+    tavily_validation_message = Column(Text, nullable=True)  # Validation result message
+    tavily_formatted_results = Column(Text, nullable=True)  # Cached formatted results for LLM
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)

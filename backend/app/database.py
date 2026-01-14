@@ -59,6 +59,18 @@ def init_db():
             migrations.append("ALTER TABLE companies ADD COLUMN llm_tokens_used INTEGER DEFAULT 0")
         if 'llm_response_time' not in company_columns:
             migrations.append("ALTER TABLE companies ADD COLUMN llm_response_time FLOAT")
+        
+        # Tavily caching & validation fields
+        if 'tavily_data_cached' not in company_columns:
+            migrations.append("ALTER TABLE companies ADD COLUMN tavily_data_cached INTEGER DEFAULT 0")
+        if 'tavily_data_verified' not in company_columns:
+            migrations.append("ALTER TABLE companies ADD COLUMN tavily_data_verified INTEGER DEFAULT 0")
+        if 'tavily_cached_at' not in company_columns:
+            migrations.append("ALTER TABLE companies ADD COLUMN tavily_cached_at DATETIME")
+        if 'tavily_validation_message' not in company_columns:
+            migrations.append("ALTER TABLE companies ADD COLUMN tavily_validation_message TEXT")
+        if 'tavily_formatted_results' not in company_columns:
+            migrations.append("ALTER TABLE companies ADD COLUMN tavily_formatted_results TEXT")
 
         # Execute migrations
         if migrations:

@@ -330,6 +330,114 @@ class LLMService:
                 "tokens_used": 0,
                 "response_time": 0.0,
             }
+    
+    async def validate_tavily_data(self, company_name: str, search_results: str) -> dict:
+        """
+        Lightweight validation check to verify Tavily data quality.
+        
+        Uses a simple LLM prompt to check if the search results are relevant and complete.
+        
+        Args:
+            company_name: Name of the company
+            search_results: Formatted search results from Tavily
+            
+        Returns:
+            dict with validation results:
+            - is_valid: bool
+            - confidence: float (0-1)
+            - message: str (explanation)
+            - tokens_used: int
+            - response_time: float
+        """
+        validation_prompt = f"""You are validating search results for company research.
+
+Company: {company_name}
+
+Search Results:
+{search_results[:2000]}  # Truncate to first 2000 chars for fast validation
+
+Task: Determine if these search results are valid and useful for analyzing this company's GPU infrastructure needs.
+
+Respond with ONLY a JSON object:
+{{
+  "is_valid": true/false,
+  "confidence": 0.0-1.0,
+  "message": "Brief explanation (1 sentence)",
+  "issues": ["List", "of", "any", "problems"]
+}}
+
+Validation criteria:
+- Results mention the company name (or close match)
+- Results contain business/tech information (not just ads/boilerplate)
+- At least 1 high-quality source is present
+- Data is not obviously wrong/irrelevant
+
+Mark as INVALID if:
+- No results mention the company
+- All results are generic/spam
+- Company name completely mismatched (e.g., searched "Anthropic", got "Party City")
+- Less than 50 words of actual content
+"""
+        
+        try:
+            start_time = time.time()
+            
+            def sync_validate():
+                return self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": "You are a data quality validator. Respond only with valid JSON."},
+                        {"role": "user", "content": validation_prompt}
+                    ],
+                    temperature=0.1,  # Low temperature for consistent validation
+                    max_tokens=200,   # Short response
+                    timeout=10,       # Fast timeout
+                )
+            
+            response = await asyncio.to_thread(sync_validate)
+            response_time = time.time() - start_time
+            
+            # Parse response
+            content = response.choices[0].message.content.strip()
+            
+            # Extract JSON
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
+            
+            validation_result = json.loads(content)
+            
+            # Extract usage
+            tokens_used = response.usage.total_tokens if response.usage else 0
+            
+            logger.info(
+                f"Validated {company_name}: {'VALID' if validation_result['is_valid'] else 'INVALID'} "
+                f"(confidence: {validation_result['confidence']:.2f}, tokens: {tokens_used}, time: {response_time:.2f}s)"
+            )
+            
+            return {
+                "success": True,
+                "is_valid": validation_result.get("is_valid", False),
+                "confidence": validation_result.get("confidence", 0.0),
+                "message": validation_result.get("message", ""),
+                "issues": validation_result.get("issues", []),
+                "tokens_used": tokens_used,
+                "response_time": response_time,
+            }
+            
+        except Exception as e:
+            logger.error(f"Validation failed for {company_name}: {str(e)}")
+            # On validation failure, assume data is valid (fail open)
+            return {
+                "success": False,
+                "is_valid": True,  # Fail open - don't block on validation errors
+                "confidence": 0.5,
+                "message": f"Validation error: {str(e)}",
+                "issues": ["validation_failed"],
+                "tokens_used": 0,
+                "response_time": 0,
+            }
 
 
 # Singleton instance
