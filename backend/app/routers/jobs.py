@@ -13,9 +13,11 @@ from sqlalchemy.orm import Session
 from ..database import get_db, SessionLocal
 from ..models import ResearchJob, Company, JobStatus, CompanyStatus
 from ..services.research import get_research_pipeline
+from ..config import get_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+settings = get_settings()
 
 
 # Pydantic models for API responses
@@ -161,9 +163,22 @@ async def upload_csv(
         pipeline = get_research_pipeline()
 
         # Create async task directly in the event loop
-        task = asyncio.create_task(
-            pipeline.run_job(job.id, lambda: SessionLocal())
-        )
+        if settings.enable_batch_processing:
+            logger.info(f"Starting job {job.id} with BATCH processing (batch_size={settings.batch_size})")
+            task = asyncio.create_task(
+                pipeline.run_job_batched(
+                    job.id, 
+                    lambda: SessionLocal(),
+                    batch_size=settings.batch_size,
+                    tavily_concurrency=settings.tavily_concurrency
+                )
+            )
+        else:
+            logger.info(f"Starting job {job.id} with SEQUENTIAL processing")
+            task = asyncio.create_task(
+                pipeline.run_job(job.id, lambda: SessionLocal())
+            )
+        
         # Register task with pipeline for proper cancellation
         pipeline.register_task(job.id, task)
         logger.info(f"Started background task for job {job.id}")
@@ -211,10 +226,15 @@ async def lookup_single_company(
     db.add(company)
     db.commit()
     
-    # Start processing in background
+    # Start processing in background (single company always uses batched method for consistency)
     pipeline = get_research_pipeline()
     task = asyncio.create_task(
-        pipeline.run_job(job.id, lambda: SessionLocal())
+        pipeline.run_job_batched(
+            job.id,
+            lambda: SessionLocal(),
+            batch_size=1,  # Single company
+            tavily_concurrency=1
+        )
     )
     # Register task with pipeline for proper cancellation
     pipeline.register_task(job.id, task)
@@ -305,9 +325,21 @@ async def start_job(job_id: int, db: Session = Depends(get_db)):
     
     # Start processing
     pipeline = get_research_pipeline()
-    task = asyncio.create_task(
-        pipeline.run_job(job_id, lambda: SessionLocal())
-    )
+    
+    if settings.enable_batch_processing:
+        task = asyncio.create_task(
+            pipeline.run_job_batched(
+                job_id,
+                lambda: SessionLocal(),
+                batch_size=settings.batch_size,
+                tavily_concurrency=settings.tavily_concurrency
+            )
+        )
+    else:
+        task = asyncio.create_task(
+            pipeline.run_job(job_id, lambda: SessionLocal())
+        )
+    
     # Register task with pipeline for proper cancellation
     pipeline.register_task(job_id, task)
     logger.info(f"Manually started job {job_id}")

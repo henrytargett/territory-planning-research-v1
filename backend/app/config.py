@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     # Rate Limiting
     delay_between_companies: float = 1.0
 
+    # Parallel Processing
+    enable_batch_processing: bool = True  # Use parallel batch processing (much faster)
+    batch_size: int = 50  # Number of concurrent LLM requests (start conservative)
+    tavily_concurrency: int = 100  # Number of concurrent Tavily searches
+
     # Job Health Monitoring
     job_stall_threshold: int = 300  # Seconds
 

@@ -124,6 +124,207 @@ class ResearchPipeline:
         company.priority_tier = analysis.get("priority_tier")
         company.recommended_action = analysis.get("recommended_action")
     
+    async def run_job_batched(
+        self,
+        job_id: int,
+        db_factory: Callable,
+        batch_size: int = 50,
+        tavily_concurrency: int = 100
+    ):
+        """
+        Run a complete research job with parallel batch processing (MUCH FASTER).
+        
+        Two-phase approach:
+        1. Fetch ALL Tavily data in parallel (seconds, not minutes)
+        2. Process LLM requests in batches (parallel within batch)
+        
+        Args:
+            job_id: ID of the ResearchJob to process
+            db_factory: Factory function to create new database sessions
+            batch_size: Number of concurrent LLM requests per batch
+            tavily_concurrency: Number of concurrent Tavily searches
+        """
+        db = db_factory()
+        
+        try:
+            job = db.query(ResearchJob).filter(ResearchJob.id == job_id).first()
+            if not job:
+                logger.error(f"Job {job_id} not found")
+                return
+            
+            # Update job status
+            job.status = JobStatus.RUNNING.value
+            job.started_at = datetime.utcnow()
+            db.commit()
+            
+            # Get pending companies
+            pending_companies = db.query(Company).filter(
+                Company.job_id == job_id,
+                Company.status == CompanyStatus.PENDING.value
+            ).all()
+            
+            total = len(pending_companies)
+            logger.info(f"Starting BATCHED job {job_id} with {total} companies (batch_size={batch_size})")
+            
+            # ============================================================
+            # PHASE 1: Fetch ALL Tavily data in parallel
+            # ============================================================
+            logger.info(f"PHASE 1: Fetching Tavily data for {total} companies in parallel...")
+            phase1_start = datetime.utcnow()
+            
+            async def fetch_tavily(company: Company):
+                """Fetch Tavily data for a single company."""
+                try:
+                    company.status = CompanyStatus.RESEARCHING.value
+                    search_results = await self.search_service.search_company(company.name)
+                    company.search_results_raw = json.dumps(search_results.get("raw_response", {}))
+                    company.tavily_credits_used = search_results.get("credits_used", 0.0)
+                    company.tavily_response_time = search_results.get("response_time")
+                    
+                    if not search_results.get("success"):
+                        return company, None, f"Search failed: {search_results.get('error', 'Unknown error')}"
+                    
+                    formatted_results = self.search_service.format_search_results_for_llm(search_results)
+                    return company, formatted_results, None
+                except Exception as e:
+                    logger.error(f"Tavily fetch failed for {company.name}: {str(e)}")
+                    return company, None, str(e)
+            
+            # Process Tavily in batches to avoid overwhelming the API
+            tavily_results = []
+            for i in range(0, total, tavily_concurrency):
+                # Check for cancellation
+                if asyncio.current_task().cancelled():
+                    logger.info(f"Job {job_id} cancelled during Tavily phase")
+                    job.status = JobStatus.CANCELLED.value
+                    db.commit()
+                    return
+                
+                batch = pending_companies[i:i+tavily_concurrency]
+                batch_results = await asyncio.gather(*[fetch_tavily(c) for c in batch], return_exceptions=True)
+                tavily_results.extend(batch_results)
+                
+                # Update progress
+                logger.info(f"Tavily progress: {min(i+tavily_concurrency, total)}/{total} companies")
+            
+            phase1_duration = (datetime.utcnow() - phase1_start).total_seconds()
+            logger.info(f"PHASE 1 complete in {phase1_duration:.1f}s - fetched data for {total} companies")
+            
+            # ============================================================
+            # PHASE 2: Process LLM analysis in batches
+            # ============================================================
+            logger.info(f"PHASE 2: Analyzing {total} companies in batches of {batch_size}...")
+            phase2_start = datetime.utcnow()
+            
+            async def analyze_company_data(company: Company, formatted_results: str):
+                """Analyze a single company with LLM."""
+                try:
+                    if formatted_results is None:
+                        return company, None, "Search failed"
+                    
+                    analysis = await self.llm_service.analyze_company(company.name, formatted_results)
+                    company.llm_response_raw = analysis.get("raw_response", "")
+                    company.llm_tokens_used = analysis.get("tokens_used", 0)
+                    company.llm_response_time = analysis.get("response_time")
+                    
+                    if not analysis.get("success"):
+                        return company, None, f"Analysis failed: {analysis.get('error', 'Unknown error')}"
+                    
+                    return company, analysis, None
+                except Exception as e:
+                    logger.error(f"LLM analysis failed for {company.name}: {str(e)}")
+                    return company, None, str(e)
+            
+            # Process LLM in batches
+            for batch_num, i in enumerate(range(0, total, batch_size), 1):
+                # Check for cancellation
+                if asyncio.current_task().cancelled():
+                    logger.info(f"Job {job_id} cancelled during LLM phase")
+                    job.status = JobStatus.CANCELLED.value
+                    db.commit()
+                    return
+                
+                batch_end = min(i + batch_size, total)
+                logger.info(f"Processing LLM batch {batch_num}: companies {i+1}-{batch_end}/{total}")
+                
+                # Get batch data
+                batch_data = tavily_results[i:batch_end]
+                
+                # Analyze batch in parallel
+                analysis_tasks = []
+                for result in batch_data:
+                    if isinstance(result, tuple):
+                        company, formatted_results, error = result
+                        if error:
+                            company.status = CompanyStatus.FAILED.value
+                            company.error_message = error
+                            job.failed_companies += 1
+                        else:
+                            analysis_tasks.append(analyze_company_data(company, formatted_results))
+                
+                # Wait for batch to complete
+                if analysis_tasks:
+                    batch_analyses = await asyncio.gather(*analysis_tasks, return_exceptions=True)
+                    
+                    # Store results
+                    for result in batch_analyses:
+                        if isinstance(result, tuple):
+                            company, analysis, error = result
+                            if error:
+                                company.status = CompanyStatus.FAILED.value
+                                company.error_message = error
+                                job.failed_companies += 1
+                            else:
+                                self._store_analysis_results(company, analysis)
+                                company.status = CompanyStatus.COMPLETED.value
+                                company.researched_at = datetime.utcnow()
+                                job.completed_companies += 1
+                                logger.info(f"✓ {company.name}: {company.priority_tier} ({company.score_total} pts)")
+                
+                # Aggregate costs
+                job.total_tavily_credits = sum(c.tavily_credits_used or 0.0 for c in pending_companies)
+                from ..utils import estimate_tavily_cost
+                job.total_cost_usd = estimate_tavily_cost(job.total_tavily_credits)
+                job.last_activity_at = datetime.utcnow()
+                
+                # Commit after each batch
+                db.commit()
+                
+                logger.info(f"Batch {batch_num} complete: {job.completed_companies}/{total} successful, {job.failed_companies} failed")
+            
+            phase2_duration = (datetime.utcnow() - phase2_start).total_seconds()
+            total_duration = phase1_duration + phase2_duration
+            
+            # Job complete
+            job.status = JobStatus.COMPLETED.value
+            job.completed_at = datetime.utcnow()
+            db.commit()
+            
+            logger.info(
+                f"Job {job_id} COMPLETE in {total_duration:.1f}s "
+                f"(Tavily: {phase1_duration:.1f}s, LLM: {phase2_duration:.1f}s) - "
+                f"{job.completed_companies} successful, {job.failed_companies} failed"
+            )
+        
+        except asyncio.CancelledError:
+            logger.info(f"Job {job_id} was cancelled")
+            job = db.query(ResearchJob).filter(ResearchJob.id == job_id).first()
+            if job:
+                job.status = JobStatus.CANCELLED.value
+                db.commit()
+            raise
+        
+        except Exception as e:
+            logger.error(f"Job {job_id} failed: {str(e)}")
+            job = db.query(ResearchJob).filter(ResearchJob.id == job_id).first()
+            if job:
+                job.status = JobStatus.FAILED.value
+                db.commit()
+        
+        finally:
+            self._running_tasks.pop(job_id, None)
+            db.close()
+    
     async def run_job(
         self,
         job_id: int,

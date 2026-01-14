@@ -38,7 +38,7 @@ class SearchService:
             return self.client.search(
                 query=query,
                 search_depth="advanced",  # More thorough search
-                max_results=8,            # Get enough context
+                max_results=20,           # Maximum results for comprehensive data (up from 8)
                 include_domains=[         # Prioritize business/tech sources
                     "crunchbase.com",
                     "linkedin.com",
@@ -50,6 +50,7 @@ class SearchService:
                     "pitchbook.com",
                 ],
                 include_answer=True,      # Get a summarized answer
+                include_raw_content=True, # Get full page content (not just snippets)
                 include_usage=True,       # Get credit usage information
             )
 
@@ -67,7 +68,8 @@ class SearchService:
             dict with search results, usage stats, and cost information
         """
         # Craft a search query optimized for finding GPU/AI infrastructure needs
-        query = f"{company_name} AI startup company funding employees training models infrastructure"
+        # Optimized: removed "startup" (excludes enterprises), added GPU-specific terms
+        query = f"{company_name} GPU compute infrastructure machine learning training inference funding employees"
 
         try:
             logger.info(f"Searching for: {company_name}")
@@ -119,12 +121,13 @@ class SearchService:
                 "estimated_cost_usd": 0.0,
             }
     
-    def format_search_results_for_llm(self, search_response: dict) -> str:
+    def format_search_results_for_llm(self, search_response: dict, min_score: float = 0.4) -> str:
         """
         Format search results into a string for the LLM to analyze.
         
         Args:
             search_response: Response from search_company()
+            min_score: Minimum relevance score (0-1) to include results
             
         Returns:
             Formatted string with search results
@@ -138,14 +141,24 @@ class SearchService:
         if search_response.get("answer"):
             parts.append(f"## Summary\n{search_response['answer']}\n")
         
+        # Filter results by relevance score and sort by score (highest first)
+        results = search_response.get("results", [])
+        filtered_results = [r for r in results if r.get("score", 0) >= min_score]
+        sorted_results = sorted(filtered_results, key=lambda x: x.get("score", 0), reverse=True)
+        
+        logger.info(f"Filtered {len(results)} results to {len(sorted_results)} (score >= {min_score})")
+        
         # Add individual results
-        parts.append("## Sources\n")
-        for i, result in enumerate(search_response.get("results", []), 1):
+        parts.append(f"## Sources ({len(sorted_results)} high-quality results)\n")
+        for i, result in enumerate(sorted_results, 1):
             title = result.get("title", "No title")
             url = result.get("url", "")
-            content = result.get("content", "No content")
+            score = result.get("score", 0)
             
-            parts.append(f"### Source {i}: {title}")
+            # Prefer raw_content (full page) over content (snippet)
+            content = result.get("raw_content") or result.get("content", "No content")
+            
+            parts.append(f"### Source {i}: {title} (relevance: {score:.2f})")
             parts.append(f"URL: {url}")
             parts.append(f"Content: {content}\n")
         
