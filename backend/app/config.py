@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     batch_size: int = 50  # Number of concurrent LLM requests (start conservative)
     tavily_concurrency: int = 100  # Number of concurrent Tavily searches
 
+    # Tavily Caching & Validation
+    enable_tavily_caching: bool = True  # Cache Tavily data to avoid re-fetching
+    tavily_validation_enabled: bool = True  # Validate data quality before caching
+    tavily_validation_threshold: float = 0.6  # Min confidence to accept data
+    tavily_max_validation_retries: int = 2  # Retry fetches if validation fails
+
     # Job Health Monitoring
     job_stall_threshold: int = 300  # Seconds
 

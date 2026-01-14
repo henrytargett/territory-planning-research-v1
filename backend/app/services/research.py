@@ -173,19 +173,84 @@ class ResearchPipeline:
             phase1_start = datetime.utcnow()
             
             async def fetch_tavily(company: Company):
-                """Fetch Tavily data for a single company."""
+                """Fetch Tavily data for a single company with caching support."""
+                from ..config import get_settings
+                settings = get_settings()
+                
                 try:
+                    # Check cache first if caching is enabled
+                    if settings.enable_tavily_caching and company.tavily_data_cached and company.tavily_data_verified:
+                        logger.info(f"💾 Cache HIT: {company.name} (saved $0.016, ~3s)")
+                        # Use cached data
+                        if company.tavily_formatted_results:
+                            company.status = CompanyStatus.RESEARCHING.value
+                            return company, company.tavily_formatted_results, None
+                    
+                    # Cache miss - fetch from Tavily
                     company.status = CompanyStatus.RESEARCHING.value
-                    search_results = await self.search_service.search_company(company.name)
-                    company.search_results_raw = json.dumps(search_results.get("raw_response", {}))
-                    company.tavily_credits_used = search_results.get("credits_used", 0.0)
-                    company.tavily_response_time = search_results.get("response_time")
                     
-                    if not search_results.get("success"):
-                        return company, None, f"Search failed: {search_results.get('error', 'Unknown error')}"
+                    # Attempt fetch with retry if validation fails
+                    max_retries = settings.tavily_max_validation_retries if settings.tavily_validation_enabled else 1
                     
-                    formatted_results = self.search_service.format_search_results_for_llm(search_results)
-                    return company, formatted_results, None
+                    for attempt in range(max_retries):
+                        search_results = await self.search_service.search_company(company.name)
+                        company.search_results_raw = json.dumps(search_results.get("raw_response", {}))
+                        company.tavily_credits_used = search_results.get("credits_used", 0.0)
+                        company.tavily_response_time = search_results.get("response_time")
+                        
+                        if not search_results.get("success"):
+                            error_msg = f"Search failed: {search_results.get('error', 'Unknown error')}"
+                            if attempt < max_retries - 1:
+                                logger.warning(f"Retry {attempt + 1}/{max_retries} for {company.name}")
+                                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                                continue
+                            return company, None, error_msg
+                        
+                        formatted_results = self.search_service.format_search_results_for_llm(search_results)
+                        
+                        # Validate data quality if enabled
+                        if settings.tavily_validation_enabled:
+                            validation = await self.llm_service.validate_tavily_data(company.name, formatted_results)
+                            company.tavily_validation_message = validation.get("message", "")
+                            
+                            if validation.get("is_valid") and validation.get("confidence", 0) >= settings.tavily_validation_threshold:
+                                # Data is valid - cache it if caching enabled
+                                if settings.enable_tavily_caching:
+                                    company.tavily_data_cached = True
+                                    company.tavily_data_verified = True
+                                    company.tavily_cached_at = datetime.utcnow()
+                                    company.tavily_formatted_results = formatted_results
+                                    db.commit()  # Persist cache immediately
+                                    logger.info(f"✓ {company.name}: Validated & cached (confidence: {validation['confidence']:.2f})")
+                                return company, formatted_results, None
+                            else:
+                                # Data is invalid - retry if attempts remain
+                                issues = ", ".join(validation.get("issues", []))
+                                logger.warning(
+                                    f"✗ {company.name}: Data invalid (confidence: {validation['confidence']:.2f}, "
+                                    f"issues: {issues})"
+                                )
+                                if attempt < max_retries - 1:
+                                    logger.info(f"Retrying Tavily fetch for {company.name}...")
+                                    await asyncio.sleep(2 ** attempt)
+                                    continue
+                                
+                                # Max retries reached with invalid data
+                                company.tavily_data_verified = False
+                                return company, None, f"Data validation failed: {validation['message']}"
+                        else:
+                            # Validation disabled - accept data and cache if enabled
+                            if settings.enable_tavily_caching:
+                                company.tavily_data_cached = True
+                                company.tavily_data_verified = True  # Assumed valid
+                                company.tavily_cached_at = datetime.utcnow()
+                                company.tavily_formatted_results = formatted_results
+                                company.tavily_validation_message = "Validation skipped (disabled)"
+                                db.commit()
+                            return company, formatted_results, None
+                    
+                    return company, None, "Max retries reached"
+                    
                 except Exception as e:
                     logger.error(f"Tavily fetch failed for {company.name}: {str(e)}")
                     return company, None, str(e)
@@ -208,7 +273,17 @@ class ResearchPipeline:
                 logger.info(f"Tavily progress: {min(i+tavily_concurrency, total)}/{total} companies")
             
             phase1_duration = (datetime.utcnow() - phase1_start).total_seconds()
-            logger.info(f"PHASE 1 complete in {phase1_duration:.1f}s - fetched data for {total} companies")
+            
+            # Calculate cache statistics
+            cache_hits = sum(1 for c in pending_companies if c.tavily_data_cached and c.tavily_data_verified)
+            cache_misses = total - cache_hits
+            cost_saved = cache_hits * 0.016
+            
+            logger.info(
+                f"PHASE 1 complete in {phase1_duration:.1f}s - "
+                f"Cache: {cache_hits} hits, {cache_misses} misses "
+                f"(saved ${cost_saved:.2f})"
+            )
             
             # ============================================================
             # PHASE 2: Process LLM analysis in batches
