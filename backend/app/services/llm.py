@@ -229,35 +229,35 @@ class LLMService:
             start_time = time.time()
 
             # Perform analysis with retry logic
-        # Try with full prompt first
-        try:
-            response = await retry_with_backoff(
-                self._perform_analysis,
-                company_name,
-                prompt,
-                max_retries=settings.max_retries,
-                base_delay=settings.retry_base_delay,
-                exceptions=(Exception,),
-                retry_on_400=True,  # Retry on 400 errors (API rejections)
-            )
-        except Exception as e:
-            error_str = str(e)
-            # If it's a 413 error (payload too large), try with truncated prompt
-            if '413' in error_str and 'too_large' in error_str:
-                logger.warning(f"Payload too large for {company_name}, retrying with truncated prompt")
-                # Truncate the search results part of the prompt (keep instructions, truncate data)
-                truncated_prompt = self._truncate_prompt_for_size(prompt)
+            # Try with full prompt first
+            try:
                 response = await retry_with_backoff(
                     self._perform_analysis,
                     company_name,
-                    truncated_prompt,
-                    max_retries=2,  # Fewer retries for truncated version
+                    prompt,
+                    max_retries=settings.max_retries,
                     base_delay=settings.retry_base_delay,
                     exceptions=(Exception,),
-                    retry_on_400=True,
+                    retry_on_400=True,  # Retry on 400 errors (API rejections)
                 )
-            else:
-                raise
+            except Exception as e:
+                error_str = str(e)
+                # If it's a 413 error (payload too large), try with truncated prompt
+                if '413' in error_str and 'too_large' in error_str:
+                    logger.warning(f"Payload too large for {company_name}, retrying with truncated prompt")
+                    # Truncate the search results part of the prompt (keep instructions, truncate data)
+                    truncated_prompt = self._truncate_prompt_for_size(prompt)
+                    response = await retry_with_backoff(
+                        self._perform_analysis,
+                        company_name,
+                        truncated_prompt,
+                        max_retries=2,  # Fewer retries for truncated version
+                        base_delay=settings.retry_base_delay,
+                        exceptions=(Exception,),
+                        retry_on_400=True,
+                    )
+                else:
+                    raise
 
             response_time = time.time() - start_time
 
