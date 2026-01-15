@@ -229,6 +229,8 @@ class LLMService:
             start_time = time.time()
 
             # Perform analysis with retry logic
+        # Try with full prompt first
+        try:
             response = await retry_with_backoff(
                 self._perform_analysis,
                 company_name,
@@ -236,7 +238,26 @@ class LLMService:
                 max_retries=settings.max_retries,
                 base_delay=settings.retry_base_delay,
                 exceptions=(Exception,),
+                retry_on_400=True,  # Retry on 400 errors (API rejections)
             )
+        except Exception as e:
+            error_str = str(e)
+            # If it's a 413 error (payload too large), try with truncated prompt
+            if '413' in error_str and 'too_large' in error_str:
+                logger.warning(f"Payload too large for {company_name}, retrying with truncated prompt")
+                # Truncate the search results part of the prompt (keep instructions, truncate data)
+                truncated_prompt = self._truncate_prompt_for_size(prompt)
+                response = await retry_with_backoff(
+                    self._perform_analysis,
+                    company_name,
+                    truncated_prompt,
+                    max_retries=2,  # Fewer retries for truncated version
+                    base_delay=settings.retry_base_delay,
+                    exceptions=(Exception,),
+                    retry_on_400=True,
+                )
+            else:
+                raise
 
             response_time = time.time() - start_time
 
@@ -438,6 +459,41 @@ Mark as INVALID if:
                 "tokens_used": 0,
                 "response_time": 0,
             }
+
+
+    def _truncate_prompt_for_size(self, prompt: str) -> str:
+        """
+        Truncate the search results portion of the prompt to reduce payload size.
+
+        Args:
+            prompt: Original prompt string
+
+        Returns:
+            Truncated prompt with smaller search results
+        """
+        try:
+            # Split the prompt to isolate the search results section
+            parts = prompt.split("SEARCH RESULTS:")
+            if len(parts) != 2:
+                # Fallback: truncate the entire prompt
+                return prompt[:8000] + "\n\n[Content truncated due to size limits]"
+
+            instructions = parts[0] + "SEARCH RESULTS:\n"
+            search_results = parts[1]
+
+            # Target size: keep instructions + ~6000 chars of results
+            max_results_size = 6000
+            if len(search_results) <= max_results_size:
+                return prompt
+
+            # Truncate search results but keep the last part (most recent results)
+            truncated_results = "...[earlier results truncated]\n\n" + search_results[-max_results_size:]
+
+            return instructions + truncated_results
+
+        except Exception as e:
+            logger.warning(f"Error truncating prompt: {e}, using simple truncation")
+            return prompt[:8000] + "\n\n[Content truncated due to size limits]"
 
 
 # Singleton instance

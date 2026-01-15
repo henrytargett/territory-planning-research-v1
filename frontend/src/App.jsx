@@ -855,13 +855,18 @@ export default function App() {
                       </span>
                       <span style={{ fontSize: 13, fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
                         {jobDetails.completed_companies + jobDetails.failed_companies}/{jobDetails.total_companies}
+                        {jobDetails.failed_companies > 0 && (
+                          <span style={{ color: '#ef4444', marginLeft: 8 }}>
+                            ({jobDetails.failed_companies} failed)
+                          </span>
+                        )}
                       </span>
                     </div>
                     <div className="progress-bar" style={{ height: 8 }}>
-                      <div 
-                        className="progress-bar-fill" 
-                        style={{ 
-                          width: `${jobDetails.total_companies > 0 ? ((jobDetails.completed_companies + jobDetails.failed_companies) / jobDetails.total_companies) * 100 : 0}%` 
+                      <div
+                        className="progress-bar-fill"
+                        style={{
+                          width: `${jobDetails.total_companies > 0 ? ((jobDetails.completed_companies + jobDetails.failed_companies) / jobDetails.total_companies) * 100 : 0}%`
                         }}
                       />
                     </div>
@@ -928,7 +933,10 @@ export default function App() {
                                   ) : company.status === 'pending' ? (
                                     'Pending'
                                   ) : company.status === 'failed' ? (
-                                    <span style={{ color: 'var(--tier-hot)' }}>Failed</span>
+                                    <span style={{ color: '#ef4444', fontWeight: 500 }}>
+                                      <XCircle size={12} style={{ marginRight: 4, display: 'inline' }} />
+                                      Failed
+                                    </span>
                                   ) : (
                                     'N/A'
                                   )}

@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     # Tavily Caching & Validation
     enable_tavily_caching: bool = True  # Cache Tavily data to avoid re-fetching
     tavily_validation_enabled: bool = True  # Validate data quality before caching
-    tavily_validation_threshold: float = 0.6  # Min confidence to accept data
+    tavily_validation_threshold: float = 0.1  # Min confidence to accept data (lowered for comprehensive research)
     tavily_max_validation_retries: int = 2  # Retry fetches if validation fails
 
     # Job Health Monitoring

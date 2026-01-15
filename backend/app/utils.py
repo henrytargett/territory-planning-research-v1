@@ -17,10 +17,11 @@ async def retry_with_backoff(
     base_delay: float = 2.0,
     max_delay: float = 30.0,
     exceptions: tuple = (Exception,),
+    retry_on_400: bool = False,
     **kwargs
 ) -> T:
     """
-    Retry an async function with exponential backoff.
+    Retry an async function with exponential backoff and error-specific handling.
 
     Args:
         func: The async function to retry
@@ -29,6 +30,7 @@ async def retry_with_backoff(
         base_delay: Initial delay between retries (seconds)
         max_delay: Maximum delay between retries (seconds)
         exceptions: Tuple of exceptions to catch and retry
+        retry_on_400: Whether to retry on HTTP 400 errors (default: False)
         **kwargs: Keyword arguments for the function
 
     Returns:
@@ -44,15 +46,34 @@ async def retry_with_backoff(
             return await func(*args, **kwargs)
         except exceptions as e:
             last_exception = e
+            error_str = str(e)
 
-            if attempt == max_retries:
-                logger.error(f"All {max_retries} retry attempts failed for {func.__name__}: {str(e)}")
+            # Check if we should retry this specific error
+            should_retry = True
+
+            # Don't retry 400 errors unless explicitly requested
+            if '400' in error_str and 'bad_request' in error_str and not retry_on_400:
+                should_retry = False
+                logger.warning(f"Not retrying 400 Bad Request error for {func.__name__}: {error_str}")
+
+            # Don't retry 413 errors (payload too large) - they won't succeed
+            if '413' in error_str and 'too_large' in error_str:
+                should_retry = False
+                logger.warning(f"Not retrying 413 Payload Too Large error for {func.__name__}: {error_str}")
+
+            if attempt == max_retries or not should_retry:
+                logger.error(f"All {max_retries} retry attempts failed for {func.__name__}: {error_str}")
                 raise
 
             # Calculate delay with exponential backoff
             delay = min(base_delay * (2 ** attempt), max_delay)
+
+            # Longer delay for API errors
+            if '400' in error_str or '429' in error_str:
+                delay = min(delay * 2, max_delay)
+
             logger.warning(
-                f"Attempt {attempt + 1}/{max_retries + 1} failed for {func.__name__}: {str(e)}. "
+                f"Attempt {attempt + 1}/{max_retries + 1} failed for {func.__name__}: {error_str}. "
                 f"Retrying in {delay:.1f}s..."
             )
             await asyncio.sleep(delay)
