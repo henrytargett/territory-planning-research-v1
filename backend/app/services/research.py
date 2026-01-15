@@ -240,20 +240,15 @@ class ResearchPipeline:
                                     logger.info(f"✓ {company.name}: Validated & cached (confidence: {validation['confidence']:.2f})")
                                 return company, formatted_results, None
                             else:
-                                # Data is invalid - retry if attempts remain
+                                # Data is invalid - but still allow research (don't cache)
                                 issues = ", ".join(validation.get("issues", []))
                                 logger.warning(
-                                    f"✗ {company.name}: Data invalid (confidence: {validation['confidence']:.2f}, "
-                                    f"issues: {issues})"
+                                    f"⚠️ {company.name}: Data quality low (confidence: {validation['confidence']:.2f}, "
+                                    f"issues: {issues}) - proceeding with research but not caching"
                                 )
-                                if attempt < max_retries - 1:
-                                    logger.info(f"Retrying Tavily fetch for {company.name}...")
-                                    await asyncio.sleep(2 ** attempt)
-                                    continue
-                                
-                                # Max retries reached with invalid data
                                 company.tavily_data_verified = False
-                                return company, None, f"Data validation failed: {validation['message']}"
+                                # Return formatted_results anyway so research can proceed
+                                return company, formatted_results, None
                         else:
                             # Validation disabled - accept data and cache if enabled
                             if settings.enable_tavily_caching:
@@ -343,15 +338,27 @@ class ResearchPipeline:
                 
                 # Analyze batch in parallel
                 analysis_tasks = []
-                for result in batch_data:
+                logger.info(f"Processing {len(batch_data)} results in batch")
+                for i, result in enumerate(batch_data):
+                    logger.info(f"Result {i}: type={type(result)}, is_tuple={isinstance(result, tuple)}")
                     if isinstance(result, tuple):
-                        company, formatted_results, error = result
-                        if error:
-                            company.status = CompanyStatus.FAILED.value
-                            company.error_message = error
-                            job.failed_companies += 1
+                        if len(result) == 3:
+                            company, formatted_results, error = result
+                            logger.info(f"  Company: {company.name}, error: {error}, formatted_results length: {len(formatted_results) if formatted_results else 0}")
+                            if error:
+                                logger.warning(f"Company {company.name} failed in Tavily phase: {error}")
+                                company.status = CompanyStatus.FAILED.value
+                                company.error_message = error
+                                job.failed_companies += 1
+                            else:
+                                logger.info(f"Company {company.name} proceeding to LLM analysis")
+                                analysis_tasks.append(analyze_company_data(company, formatted_results))
                         else:
-                            analysis_tasks.append(analyze_company_data(company, formatted_results))
+                            logger.error(f"Unexpected tuple length: {len(result)}")
+                    else:
+                        logger.error(f"Result {i} is not a tuple: {type(result)}")
+
+                logger.info(f"Created {len(analysis_tasks)} analysis tasks")
                 
                 # Wait for batch to complete
                 if analysis_tasks:
