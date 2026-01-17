@@ -482,7 +482,7 @@ export default function App() {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <Cpu size={32} style={{ color: 'var(--accent-emerald)' }} />
-              <h1 style={{ fontSize: 28 }}>Territory Planner</h1>
+              <h1 style={{ fontSize: 28 }}>Company Ranking and Research Assistant</h1>
             </div>
             <button
               onClick={() => setShowScoringInfo(true)}
@@ -575,7 +575,7 @@ export default function App() {
                 ) : (
                   <>
                     <p style={{ marginBottom: 16 }}>
-                      The Territory Planner uses a four-component scoring model (0–100 total) to rank AI-native startups by GPU infrastructure need. The primary component is <strong style={{ color: 'var(--text-primary)' }}>GPU Use Case (0–50 points)</strong>, which classifies companies into six tiers: <strong style={{ color: 'var(--text-primary)' }}>Tier S (50 points)</strong> for frontier pre-training; <strong style={{ color: 'var(--text-primary)' }}>Tier A/B/C (45 points each)</strong> for post-training at scale, massive in-house inference, or AI infrastructure platforms; <strong style={{ color: 'var(--text-primary)' }}>Tier D (35 points)</strong> for specialized training; and <strong style={{ color: 'var(--text-primary)' }}>Tier E (10 points)</strong> for API wrappers or unproven AI.
+                      The Company Ranking and Research Assistant uses a four-component scoring model (0–100 total) to rank AI-native startups by GPU infrastructure need. The primary component is <strong style={{ color: 'var(--text-primary)' }}>GPU Use Case (0–50 points)</strong>, which classifies companies into six tiers: <strong style={{ color: 'var(--text-primary)' }}>Tier S (50 points)</strong> for frontier pre-training; <strong style={{ color: 'var(--text-primary)' }}>Tier A/B/C (45 points each)</strong> for post-training at scale, massive in-house inference, or AI infrastructure platforms; <strong style={{ color: 'var(--text-primary)' }}>Tier D (35 points)</strong> for specialized training; and <strong style={{ color: 'var(--text-primary)' }}>Tier E (10 points)</strong> for API wrappers or unproven AI.
                     </p>
                     <p>
                       The remaining components are <strong style={{ color: 'var(--text-primary)' }}>Scale & Budget (0–30 points)</strong>, <strong style={{ color: 'var(--text-primary)' }}>Growth Signals (0–10 points)</strong>, and <strong style={{ color: 'var(--text-primary)' }}>Confidence (0–10 points)</strong>. The final tier mapping is <strong style={{ color: 'var(--tier-hot)' }}>HOT</strong>, <strong style={{ color: 'var(--tier-warm)' }}>WARM</strong>, <strong style={{ color: 'var(--tier-watch)' }}>WATCH</strong>, and <strong style={{ color: 'var(--tier-cold)' }}>COLD</strong>.
