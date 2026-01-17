@@ -26,7 +26,8 @@ async def fetch_and_validate_tavily_data(
     search_service,
     llm_service,
     db: Session,
-    max_retries: int = 2
+    max_retries: int = 2,
+    target_type: str = "iaas"
 ) -> Tuple[Company, Optional[str], Optional[str]]:
     """
     Phase 1: Fetch Tavily data, validate it, and cache if valid.
@@ -49,7 +50,7 @@ async def fetch_and_validate_tavily_data(
             db.commit()
             
             # Fetch from Tavily
-            search_results = await search_service.search_company(company.name)
+            search_results = await search_service.search_company(company.name, target_type)
             company.search_results_raw = json.dumps(search_results.get("raw_response", {}))
             company.tavily_credits_used = search_results.get("credits_used", 0.0)
             company.tavily_response_time = search_results.get("response_time")
@@ -148,6 +149,8 @@ async def run_job_with_caching(
         job.started_at = datetime.utcnow()
         db.commit()
         
+        job_type = job.job_type or "iaas"
+
         # Get pending companies
         pending_companies = db.query(Company).filter(
             Company.job_id == job_id,
@@ -155,7 +158,7 @@ async def run_job_with_caching(
         ).all()
         
         total = len(pending_companies)
-        logger.info(f"=== Starting JOB {job_id} with {total} companies (CACHING ENABLED) ===")
+        logger.info(f"=== Starting JOB {job_id} ({job_type}) with {total} companies (CACHING ENABLED) ===")
         
         # ================================================================
         # PHASE 1: Fetch & Validate ALL Tavily Data (with caching)
@@ -185,7 +188,7 @@ async def run_job_with_caching(
             
             # Fetch and validate in parallel
             batch_results = await asyncio.gather(
-                *[fetch_and_validate_tavily_data(company, search_service, llm_service, db) for company in batch],
+                *[fetch_and_validate_tavily_data(company, search_service, llm_service, db, target_type=job_type) for company in batch],
                 return_exceptions=True
             )
             tavily_results.extend(batch_results)
@@ -219,7 +222,7 @@ async def run_job_with_caching(
                 if formatted_results is None:
                     return company, None, "No valid Tavily data"
                 
-                analysis = await llm_service.analyze_company(company.name, formatted_results)
+                analysis = await llm_service.analyze_company(company.name, formatted_results, job_type)
                 company.llm_response_raw = analysis.get("raw_response", "")
                 company.llm_tokens_used = analysis.get("tokens_used", 0)
                 company.llm_response_time = analysis.get("response_time")

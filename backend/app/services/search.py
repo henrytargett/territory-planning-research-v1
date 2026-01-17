@@ -38,7 +38,7 @@ class SearchService:
             return self.client.search(
                 query=query,
                 search_depth="advanced",  # More thorough search
-                max_results=20,           # Maximum results for comprehensive data (up from 8)
+                max_results=10,           # Reduced from 20 to prevent oversized responses
                 include_domains=[         # Prioritize business/tech sources
                     "crunchbase.com",
                     "linkedin.com",
@@ -49,7 +49,7 @@ class SearchService:
                     "venturebeat.com",
                     "pitchbook.com",
                 ],
-                include_answer=True,      # Get a summarized answer
+                include_answer=False,     # DO NOT use Tavily's answer - it hallucinates company info
                 include_raw_content=True, # Get full page content (not just snippets)
                 include_usage=True,       # Get credit usage information
             )
@@ -57,19 +57,26 @@ class SearchService:
         # Run in thread pool to avoid blocking event loop
         return await asyncio.to_thread(sync_search)
 
-    async def search_company(self, company_name: str) -> dict:
+    async def search_company(self, company_name: str, target_type: str = "iaas") -> dict:
         """
         Search for company information with retry logic and cost tracking.
 
         Args:
             company_name: Name of the company to research
+            target_type: "iaas" or "managed_inference"
 
         Returns:
             dict with search results, usage stats, and cost information
         """
-        # Craft a search query optimized for finding GPU/AI infrastructure needs
-        # Optimized: removed "startup" (excludes enterprises), added GPU-specific terms
-        query = f"{company_name} GPU compute infrastructure machine learning training inference funding employees"
+        # Craft a search query optimized for target type
+        if target_type == "managed_inference":
+            # BROAD query to find ANY company with AI features
+            # Let the LLM identify managed inference signals from general AI content
+            query = f"{company_name} AI features machine learning inference API deployment model serving scale"
+        else:
+            # Default: IaaS targets (GPU infrastructure)
+            # Optimized: removed "startup" (excludes enterprises), added GPU-specific terms
+            query = f"{company_name} GPU compute infrastructure machine learning training inference funding employees"
 
         try:
             logger.info(f"Searching for: {company_name}")
@@ -101,6 +108,7 @@ class SearchService:
                 "success": True,
                 "company_name": company_name,
                 "query": query,
+                "target_type": target_type,
                 "answer": response.get("answer", ""),
                 "results": response.get("results", []),
                 "credits_used": credits_used,
@@ -121,13 +129,13 @@ class SearchService:
                 "estimated_cost_usd": 0.0,
             }
     
-    def format_search_results_for_llm(self, search_response: dict, min_score: float = 0.4) -> str:
+    def format_search_results_for_llm(self, search_response: dict, min_score: float = 0.2) -> str:
         """
         Format search results into a string for the LLM to analyze.
         
         Args:
             search_response: Response from search_company()
-            min_score: Minimum relevance score (0-1) to include results
+            min_score: Minimum relevance score (0-1) to include results (default 0.2)
             
         Returns:
             Formatted string with search results
@@ -137,9 +145,10 @@ class SearchService:
         
         parts = [f"# Search Results for: {search_response['company_name']}\n"]
         
-        # Add the summarized answer if available
-        if search_response.get("answer"):
-            parts.append(f"## Summary\n{search_response['answer']}\n")
+        # ⚠️ DO NOT include Tavily's "answer" field - it hallucinates!
+        # Tavily's LLM-generated summaries frequently fabricate company information,
+        # especially claiming non-AI companies are "AI infrastructure platforms".
+        # We only use the raw source documents to prevent hallucinations.
         
         # Filter results by relevance score and sort by score (highest first)
         results = search_response.get("results", [])

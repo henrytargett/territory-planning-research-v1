@@ -22,7 +22,7 @@ class ResearchPipeline:
         self.llm_service = get_llm_service()
         self._running_tasks: dict[int, asyncio.Task] = {}  # Track running tasks for proper cancellation
     
-    async def process_company(self, company: Company, db: Session) -> bool:
+    async def process_company(self, company: Company, db: Session, job_type: str = "iaas") -> bool:
         """
         Process a single company through the research pipeline.
         
@@ -41,7 +41,7 @@ class ResearchPipeline:
             logger.info(f"Starting research for: {company.name}")
             
             # Step 1: Search for company information
-            search_results = await self.search_service.search_company(company.name)
+            search_results = await self.search_service.search_company(company.name, job_type)
             company.search_results_raw = json.dumps(search_results.get("raw_response", {}))
 
             # Store Tavily cost data
@@ -58,7 +58,7 @@ class ResearchPipeline:
             formatted_results = self.search_service.format_search_results_for_llm(search_results)
 
             # Step 3: Analyze with LLM
-            analysis = await self.llm_service.analyze_company(company.name, formatted_results)
+            analysis = await self.llm_service.analyze_company(company.name, formatted_results, job_type)
             company.llm_response_raw = analysis.get("raw_response", "")
 
             # Store LLM usage data
@@ -151,6 +151,7 @@ class ResearchPipeline:
             if not job:
                 logger.error(f"Job {job_id} not found")
                 return
+            job_type = job.job_type or "iaas"
             
             # Update job status
             job.status = JobStatus.RUNNING.value
@@ -164,7 +165,10 @@ class ResearchPipeline:
             ).all()
             
             total = len(pending_companies)
-            logger.info(f"Starting BATCHED job {job_id} with {total} companies (batch_size={batch_size})")
+            logger.info(
+                f"Starting BATCHED job {job_id} ({job_type}) with {total} companies "
+                f"(batch_size={batch_size})"
+            )
             
             # ============================================================
             # PHASE 1: Fetch ALL Tavily data in parallel
@@ -180,12 +184,19 @@ class ResearchPipeline:
                 try:
                     # Check cache first if caching is enabled (cross-job lookup by name)
                     if settings.enable_tavily_caching:
-                        cached_company = db.query(Company).filter(
-                            Company.name == company.name,
-                            Company.tavily_data_cached == True,
-                            Company.tavily_data_verified == True,
-                            Company.tavily_formatted_results != None
-                        ).order_by(Company.tavily_cached_at.desc()).first()
+                        cached_company = (
+                            db.query(Company)
+                            .join(ResearchJob, ResearchJob.id == Company.job_id)
+                            .filter(
+                                Company.name == company.name,
+                                ResearchJob.job_type == job_type,
+                                Company.tavily_data_cached == True,
+                                Company.tavily_data_verified == True,
+                                Company.tavily_formatted_results != None
+                            )
+                            .order_by(Company.tavily_cached_at.desc())
+                            .first()
+                        )
                         
                         if cached_company:
                             logger.info(f"💾 Cache HIT: {company.name} (saved $0.016, ~3s)")
@@ -209,7 +220,7 @@ class ResearchPipeline:
                     max_retries = settings.tavily_max_validation_retries if settings.tavily_validation_enabled else 1
                     
                     for attempt in range(max_retries):
-                        search_results = await self.search_service.search_company(company.name)
+                        search_results = await self.search_service.search_company(company.name, job_type)
                         company.search_results_raw = json.dumps(search_results.get("raw_response", {}))
                         company.tavily_credits_used = search_results.get("credits_used", 0.0)
                         company.tavily_response_time = search_results.get("response_time")
@@ -308,7 +319,7 @@ class ResearchPipeline:
                     if formatted_results is None:
                         return company, None, "Search failed"
                     
-                    analysis = await self.llm_service.analyze_company(company.name, formatted_results)
+                    analysis = await self.llm_service.analyze_company(company.name, formatted_results, job_type)
                     company.llm_response_raw = analysis.get("raw_response", "")
                     company.llm_tokens_used = analysis.get("tokens_used", 0)
                     company.llm_response_time = analysis.get("response_time")
@@ -445,6 +456,7 @@ class ResearchPipeline:
             if not job:
                 logger.error(f"Job {job_id} not found")
                 return
+            job_type = job.job_type or "iaas"
             
             # Update job status
             job.status = JobStatus.RUNNING.value
@@ -468,7 +480,7 @@ class ResearchPipeline:
                     return
 
                 # Process company
-                success = await self.process_company(company, db)
+                success = await self.process_company(company, db, job_type)
 
                 # Update job progress and health monitoring
                 if success:

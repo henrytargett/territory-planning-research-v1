@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 settings = get_settings()
 
+VALID_JOB_TYPES = {"iaas", "managed_inference"}
+
 
 # Pydantic models for API responses
 class CompanyResponse(BaseModel):
@@ -57,6 +59,7 @@ class CompanyResponse(BaseModel):
 class JobResponse(BaseModel):
     id: int
     name: Optional[str] = None
+    job_type: str = "iaas"
     status: str
     total_companies: int
     completed_companies: int
@@ -91,6 +94,7 @@ async def upload_csv(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     submitted_by: Optional[str] = Query(None, description="Name of person submitting the job"),
+    target_type: str = Query("iaas", description="Target type: iaas or managed_inference"),
     db: Session = Depends(get_db),
 ):
     """
@@ -137,6 +141,10 @@ async def upload_csv(
         if not company_names:
             raise HTTPException(status_code=400, detail="No company names found in CSV")
         
+        # Validate target type
+        if target_type not in VALID_JOB_TYPES:
+            raise HTTPException(status_code=400, detail="Invalid target_type. Use 'iaas' or 'managed_inference'.")
+
         # Create job
         job = ResearchJob(
             name=f"Research Job - {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}",
@@ -144,6 +152,7 @@ async def upload_csv(
             total_companies=len(company_names),
             original_filename=file.filename,
             submitted_by=submitted_by or "Anonymous",
+            job_type=target_type,
         )
         db.add(job)
         db.commit()
@@ -195,6 +204,7 @@ async def upload_csv(
 async def lookup_single_company(
     company_name: str = Query(..., description="Name of the company to research"),
     submitted_by: Optional[str] = Query(None, description="Name of person submitting the job"),
+    target_type: str = Query("iaas", description="Target type: iaas or managed_inference"),
     db: Session = Depends(get_db),
 ):
     """
@@ -205,6 +215,9 @@ async def lookup_single_company(
     
     company_name = company_name.strip()
     
+    if target_type not in VALID_JOB_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid target_type. Use 'iaas' or 'managed_inference'.")
+
     # Create job
     job = ResearchJob(
         name=f"Single Company: {company_name}",
@@ -212,6 +225,7 @@ async def lookup_single_company(
         total_companies=1,
         original_filename=None,
         submitted_by=submitted_by or "Anonymous",
+        job_type=target_type,
     )
     db.add(job)
     db.commit()
@@ -248,6 +262,7 @@ async def list_jobs(
     skip: int = 0,
     limit: int = 50,
     submitted_by: Optional[str] = None,
+    job_type: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     """List all research jobs. Optionally filter by submitter."""
@@ -255,6 +270,10 @@ async def list_jobs(
     
     if submitted_by:
         query = query.filter(ResearchJob.submitted_by == submitted_by)
+    if job_type:
+        if job_type not in VALID_JOB_TYPES:
+            raise HTTPException(status_code=400, detail="Invalid job_type. Use 'iaas' or 'managed_inference'.")
+        query = query.filter(ResearchJob.job_type == job_type)
     
     jobs = query.order_by(ResearchJob.created_at.desc()).offset(skip).limit(limit).all()
     total = query.count()
@@ -276,6 +295,7 @@ async def get_job(job_id: int, db: Session = Depends(get_db)):
     return JobDetailResponse(
         id=job.id,
         name=job.name,
+        job_type=job.job_type or "iaas",
         status=job.status,
         total_companies=job.total_companies,
         completed_companies=job.completed_companies,
@@ -398,15 +418,26 @@ async def export_job_results(job_id: int, db: Session = Depends(get_db)):
     writer = csv.writer(output)
     
     # Header
-    writer.writerow([
-        "Rank", "Company Name", "Priority Tier", "Total Score",
-        "GPU Use Case Tier", "GPU Use Case", "Description",
-        "Employee Count", "Funding (Millions USD)", "Total Funding (Text)", "Last Round",
-        "Industry", "Business Model", "Headquarters",
-        "Score: GPU Use Case", "Score: Scale/Budget", "Score: Growth", "Score: Confidence",
-        "Reasoning", "Positive Signals", "Negative Signals",
-        "Recommended Action", "Status", "Submitted By"
-    ])
+    if (job.job_type or "iaas") == "managed_inference":
+        writer.writerow([
+            "Rank", "Company Name", "Priority Tier", "Total Score",
+            "Inference Scale Tier", "Inference Scale", "Description",
+            "Employee Count", "Funding (Millions USD)", "Total Funding (Text)", "Last Round",
+            "Industry", "Business Model", "Headquarters",
+            "Score: Inference Scale", "Score: Platform Adoption", "Score: Growth", "Score: Confidence",
+            "Reasoning", "Positive Signals", "Negative Signals",
+            "Recommended Action", "Status", "Submitted By"
+        ])
+    else:
+        writer.writerow([
+            "Rank", "Company Name", "Priority Tier", "Total Score",
+            "GPU Use Case Tier", "GPU Use Case", "Description",
+            "Employee Count", "Funding (Millions USD)", "Total Funding (Text)", "Last Round",
+            "Industry", "Business Model", "Headquarters",
+            "Score: GPU Use Case", "Score: Scale/Budget", "Score: Growth", "Score: Confidence",
+            "Reasoning", "Positive Signals", "Negative Signals",
+            "Recommended Action", "Status", "Submitted By"
+        ])
     
     # Data rows
     for i, company in enumerate(companies, 1):

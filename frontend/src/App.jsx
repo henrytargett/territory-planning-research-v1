@@ -46,20 +46,28 @@ function formatDuration(seconds) {
 }
 
 // Tier badge component
-function TierBadge({ tier }) {
-  const config = {
+function TierBadge({ tier, targetType = 'iaas' }) {
+  const baseConfig = {
     HOT: { class: 'badge-hot', icon: Flame, label: 'HOT' },
     WARM: { class: 'badge-warm', icon: Thermometer, label: 'WARM' },
     WATCH: { class: 'badge-watch', icon: Eye, label: 'WATCH' },
     COLD: { class: 'badge-cold', icon: Snowflake, label: 'COLD' },
   }
+
+  const managedLabels = {
+    HOT: 'ENTERPRISE',
+    WARM: 'HIGH-VOLUME',
+    WATCH: 'PRODUCTION',
+    COLD: 'SMALL-SCALE',
+  }
   
-  const { class: className, icon: Icon, label } = config[tier] || config.COLD
+  const { class: className, icon: Icon, label } = baseConfig[tier] || baseConfig.COLD
+  const displayLabel = targetType === 'managed_inference' ? (managedLabels[tier] || label) : label
   
   return (
     <span className={`badge ${className}`}>
       <Icon size={12} style={{ marginRight: 4 }} />
-      {label}
+      {displayLabel}
     </span>
   )
 }
@@ -114,7 +122,7 @@ function ScoreBar({ score, max = 100 }) {
 }
 
 // Company row expanded details
-function CompanyDetails({ company }) {
+function CompanyDetails({ company, targetType = 'iaas' }) {
   return (
     <tr>
       <td colSpan={7} style={{ padding: 0, background: 'var(--bg-secondary)' }}>
@@ -151,10 +159,10 @@ function CompanyDetails({ company }) {
               </div>
             </div>
             
-            {/* GPU Analysis */}
+            {/* GPU / Inference Analysis */}
             <div>
               <h4 style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                GPU Analysis
+                {targetType === 'managed_inference' ? 'Inference Analysis' : 'GPU Analysis'}
               </h4>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
                 {company.gpu_use_case_tier && <GPUTierBadge tier={company.gpu_use_case_tier} />}
@@ -176,11 +184,15 @@ function CompanyDetails({ company }) {
               </h4>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>GPU Use Case</span>
+                  <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                    {targetType === 'managed_inference' ? 'Inference Scale' : 'GPU Use Case'}
+                  </span>
                   <ScoreBar score={company.score_gpu_use_case} max={50} />
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Scale & Budget</span>
+                  <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                    {targetType === 'managed_inference' ? 'Platform Adoption' : 'Scale & Budget'}
+                  </span>
                   <ScoreBar score={company.score_scale_budget} max={30} />
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -273,6 +285,7 @@ export default function App() {
   const [singleCompanyName, setSingleCompanyName] = useState('')
   const [processingSingle, setProcessingSingle] = useState(false)
   const [showScoringInfo, setShowScoringInfo] = useState(false)
+  const [targetType, setTargetType] = useState('iaas')
   
   // Fetch jobs list
   const fetchJobs = useCallback(async () => {
@@ -281,6 +294,7 @@ export default function App() {
       if (filterBySubmitter && filterBySubmitter !== 'all') {
         params.append('submitted_by', filterBySubmitter)
       }
+      params.append('job_type', targetType)
       const res = await fetch(`${API_BASE}/jobs/?${params.toString()}`)
       const data = await res.json()
       setJobs(data.jobs)
@@ -289,7 +303,7 @@ export default function App() {
     } finally {
       setLoading(false)
     }
-  }, [filterBySubmitter])
+  }, [filterBySubmitter, targetType])
   
   // Fetch job details
   const fetchJobDetails = useCallback(async (jobId) => {
@@ -322,6 +336,14 @@ export default function App() {
       fetchJobDetails(selectedJob)
     }
   }, [selectedJob, fetchJobDetails])
+
+  // Reset view when switching target type tabs
+  useEffect(() => {
+    setSelectedJob(null)
+    setJobDetails(null)
+    setTierFilter('all')
+    setExpandedRows(new Set())
+  }, [targetType])
   
   // Handle file upload
   const handleUpload = async (e) => {
@@ -337,6 +359,7 @@ export default function App() {
     if (submitterName.trim()) {
       params.append('submitted_by', submitterName.trim())
     }
+    params.append('target_type', targetType)
     
     try {
       const res = await fetch(`${API_BASE}/jobs/upload?${params.toString()}`, {
@@ -374,6 +397,7 @@ export default function App() {
     if (submitterName.trim()) {
       params.append('submitted_by', submitterName.trim())
     }
+    params.append('target_type', targetType)
     
     try {
       const res = await fetch(`${API_BASE}/jobs/single?${params.toString()}`, {
@@ -461,11 +485,16 @@ export default function App() {
     COLD: jobDetails?.companies?.filter(c => c.priority_tier === 'COLD').length || 0,
   }
 
+  const activeJobType = jobDetails?.job_type || targetType
+  const tierLabels = activeJobType === 'managed_inference'
+    ? { HOT: 'Enterprise', WARM: 'High-Volume', WATCH: 'Production', COLD: 'Small-Scale' }
+    : { HOT: 'Hot', WARM: 'Warm', WATCH: 'Watch', COLD: 'Cold' }
+
   return (
     <div style={{ minHeight: '100vh', padding: '40px 0' }}>
       <div className="container">
         {/* Header */}
-        <header style={{ marginBottom: 40 }} className="animate-fade-in">
+        <header style={{ marginBottom: 24 }} className="animate-fade-in">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <Cpu size={32} style={{ color: 'var(--accent-emerald)' }} />
@@ -481,10 +510,32 @@ export default function App() {
               How It Works
             </button>
           </div>
-          <p style={{ color: 'var(--text-secondary)', maxWidth: 600 }}>
-            AI-powered company research and ranking for GPU infrastructure sales prospects.
+          <p style={{ color: 'var(--text-secondary)', maxWidth: 700 }}>
+            {targetType === 'managed_inference'
+              ? 'AI-powered company research for managed inference reserved capacity targets.'
+              : 'AI-powered company research and ranking for GPU infrastructure sales prospects.'}
           </p>
         </header>
+
+        {/* Target Type Tabs */}
+        <div className="card" style={{ marginBottom: 24, padding: 12 }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              onClick={() => setTargetType('iaas')}
+              className={`btn ${targetType === 'iaas' ? 'btn-primary' : 'btn-secondary'}`}
+              style={{ flex: 1, padding: '10px 14px', fontSize: 13 }}
+            >
+              📊 IaaS Targets
+            </button>
+            <button
+              onClick={() => setTargetType('managed_inference')}
+              className={`btn ${targetType === 'managed_inference' ? 'btn-primary' : 'btn-secondary'}`}
+              style={{ flex: 1, padding: '10px 14px', fontSize: 13 }}
+            >
+              🔥 Managed Inference Targets
+            </button>
+          </div>
+        </div>
         
         {/* Scoring System Info Modal */}
         {showScoringInfo && (
@@ -525,12 +576,25 @@ export default function App() {
                 </button>
               </div>
               <div style={{ color: 'var(--text-secondary)', lineHeight: 1.7, fontSize: 14 }}>
-                <p style={{ marginBottom: 16 }}>
-                  The Territory Planner uses a four-component scoring model (0–100 total) to rank AI-native startups by GPU infrastructure need. The primary component is <strong style={{ color: 'var(--text-primary)' }}>GPU Use Case (0–50 points)</strong>, which classifies companies into six tiers: <strong style={{ color: 'var(--text-primary)' }}>Tier S (50 points)</strong> for frontier pre-training companies like Anthropic and Mistral; <strong style={{ color: 'var(--text-primary)' }}>Tier A/B/C (45 points each)</strong> for post-training at scale, massive in-house inference, or AI infrastructure platforms; <strong style={{ color: 'var(--text-primary)' }}>Tier D (35 points)</strong> for specialized training or GPU-heavy industries like autonomous vehicles, robotics, and quantitative trading; and <strong style={{ color: 'var(--text-primary)' }}>Tier E (10 points)</strong> for API wrappers or companies with no evidence of custom model training. The remaining components are <strong style={{ color: 'var(--text-primary)' }}>Scale & Budget (0–30 points)</strong> based on funding amount, <strong style={{ color: 'var(--text-primary)' }}>Growth Signals (0–10 points)</strong> for hiring and expansion activity, and <strong style={{ color: 'var(--text-primary)' }}>Confidence (0–10 points)</strong> reflecting data quality.
-                </p>
-                <p>
-                  The system uses Llama-3.3-70B-Instruct via Crusoe Cloud with a structured prompt that includes tier definitions, scoring guidelines, and signal detection rules. The LLM receives Tavily search results formatted as web snippets and analyzes them to extract company information, classify GPU use case tier, and assign scores. The prompt emphasizes critical distinctions: companies using third-party APIs cannot score above 10 points for GPU use case regardless of funding, autonomous vehicle and quant trading firms default to at least Tier D unless they outsource all AI, and companies with "no clear evidence" of training automatically receive Tier E classification. The LLM outputs structured JSON with reasoning, positive/negative signals, and all four score components, which are summed to produce a final 0–100 score that maps to priority tiers: <strong style={{ color: 'var(--tier-hot)' }}>HOT (75+)</strong>, <strong style={{ color: 'var(--tier-warm)' }}>WARM (55–74)</strong>, <strong style={{ color: 'var(--tier-watch)' }}>WATCH (35–54)</strong>, and <strong style={{ color: 'var(--tier-cold)' }}>COLD (&lt;35)</strong>.
-                </p>
+                {targetType === 'managed_inference' ? (
+                  <>
+                    <p style={{ marginBottom: 16 }}>
+                      Managed Inference Targets are companies serving large-scale AI inference through managed providers (e.g., Fireworks, Baseten, Together.ai) instead of running their own GPU fleets. The scoring model still totals 0–100, but the primary dimension is <strong style={{ color: 'var(--text-primary)' }}>Inference Scale (0–50 points)</strong> based on user volume and AI usage.
+                    </p>
+                    <p>
+                      The second dimension is <strong style={{ color: 'var(--text-primary)' }}>Managed Platform Adoption (0–30 points)</strong> based on evidence of reserved capacity, dedicated endpoints, or provider partnerships. Growth Signals and Confidence complete the score. Priority tiers map to: <strong style={{ color: 'var(--tier-hot)' }}>ENTERPRISE</strong>, <strong style={{ color: 'var(--tier-warm)' }}>HIGH-VOLUME</strong>, <strong style={{ color: 'var(--tier-watch)' }}>PRODUCTION</strong>, and <strong style={{ color: 'var(--tier-cold)' }}>SMALL-SCALE</strong>.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p style={{ marginBottom: 16 }}>
+                      The Territory Planner uses a four-component scoring model (0–100 total) to rank AI-native startups by GPU infrastructure need. The primary component is <strong style={{ color: 'var(--text-primary)' }}>GPU Use Case (0–50 points)</strong>, which classifies companies into six tiers: <strong style={{ color: 'var(--text-primary)' }}>Tier S (50 points)</strong> for frontier pre-training; <strong style={{ color: 'var(--text-primary)' }}>Tier A/B/C (45 points each)</strong> for post-training at scale, massive in-house inference, or AI infrastructure platforms; <strong style={{ color: 'var(--text-primary)' }}>Tier D (35 points)</strong> for specialized training; and <strong style={{ color: 'var(--text-primary)' }}>Tier E (10 points)</strong> for API wrappers or unproven AI.
+                    </p>
+                    <p>
+                      The remaining components are <strong style={{ color: 'var(--text-primary)' }}>Scale & Budget (0–30 points)</strong>, <strong style={{ color: 'var(--text-primary)' }}>Growth Signals (0–10 points)</strong>, and <strong style={{ color: 'var(--text-primary)' }}>Confidence (0–10 points)</strong>. The final tier mapping is <strong style={{ color: 'var(--tier-hot)' }}>HOT</strong>, <strong style={{ color: 'var(--tier-warm)' }}>WARM</strong>, <strong style={{ color: 'var(--tier-watch)' }}>WATCH</strong>, and <strong style={{ color: 'var(--tier-cold)' }}>COLD</strong>.
+                    </p>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -709,6 +773,11 @@ export default function App() {
                           <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                             <FileSpreadsheet size={16} style={{ color: 'var(--accent-emerald)' }} />
                             <span style={{ fontSize: 14, fontWeight: 500 }}>Job #{job.id}</span>
+                            {job.job_type && (
+                              <span style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                                {job.job_type === 'managed_inference' ? 'Managed' : 'IaaS'}
+                              </span>
+                            )}
                           </span>
                           {job.submitted_by && (
                             <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 24 }}>
@@ -774,7 +843,14 @@ export default function App() {
                 <div className="card" style={{ marginBottom: 16 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
                     <div>
-                      <h2 style={{ fontSize: 20, marginBottom: 4 }}>{jobDetails.name || `Job #${jobDetails.id}`}</h2>
+                      <h2 style={{ fontSize: 20, marginBottom: 4 }}>
+                        {jobDetails.name || `Job #${jobDetails.id}`}
+                        {jobDetails.job_type && (
+                          <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--text-muted)' }}>
+                            · {jobDetails.job_type === 'managed_inference' ? 'Managed Inference Targets' : 'IaaS Targets'}
+                          </span>
+                        )}
+                      </h2>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                         {jobDetails.original_filename && (
                           <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>
@@ -876,10 +952,10 @@ export default function App() {
                   <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
                     {[
                       { tier: 'all', label: 'All', count: jobDetails.companies?.length || 0 },
-                      { tier: 'HOT', label: 'Hot', count: tierCounts.HOT },
-                      { tier: 'WARM', label: 'Warm', count: tierCounts.WARM },
-                      { tier: 'WATCH', label: 'Watch', count: tierCounts.WATCH },
-                      { tier: 'COLD', label: 'Cold', count: tierCounts.COLD },
+                      { tier: 'HOT', label: tierLabels.HOT, count: tierCounts.HOT },
+                      { tier: 'WARM', label: tierLabels.WARM, count: tierCounts.WARM },
+                      { tier: 'WATCH', label: tierLabels.WATCH, count: tierCounts.WATCH },
+                      { tier: 'COLD', label: tierLabels.COLD, count: tierCounts.COLD },
                     ].map(({ tier, label, count }) => (
                       <button
                         key={tier}
@@ -901,7 +977,7 @@ export default function App() {
                         <th style={{ width: 40 }}>#</th>
                         <th>Company</th>
                         <th>Tier</th>
-                        <th>GPU Use Case</th>
+                        <th>{activeJobType === 'managed_inference' ? 'Inference Scale' : 'GPU Use Case'}</th>
                         <th>Funding</th>
                         <th>Score</th>
                         <th style={{ width: 40 }}></th>
@@ -925,7 +1001,7 @@ export default function App() {
                             </td>
                             <td>
                               {company.priority_tier ? (
-                                <TierBadge tier={company.priority_tier} />
+                                <TierBadge tier={company.priority_tier} targetType={activeJobType} />
                               ) : (
                                 <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>
                                   {company.status === 'researching' ? (
@@ -971,7 +1047,7 @@ export default function App() {
                             </td>
                           </tr>
                           {expandedRows.has(company.id) && company.status === 'completed' && (
-                            <CompanyDetails company={company} />
+                            <CompanyDetails company={company} targetType={activeJobType} />
                           )}
                         </React.Fragment>
                       ))}

@@ -77,6 +77,9 @@ class ResearchJob(Base):
     # User tracking
     submitted_by = Column(String(100), nullable=True, index=True)  # Name/identifier of who submitted
 
+    # Target type (IaaS vs Managed Inference)
+    job_type = Column(String(32), default="iaas", index=True)
+
     # Relationships
     companies = relationship("Company", back_populates="job", cascade="all, delete-orphan")
 

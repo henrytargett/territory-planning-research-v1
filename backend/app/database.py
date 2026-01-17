@@ -47,6 +47,8 @@ def init_db():
             migrations.append("ALTER TABLE research_jobs ADD COLUMN last_activity_at DATETIME")
         if 'stalled' not in job_columns:
             migrations.append("ALTER TABLE research_jobs ADD COLUMN stalled INTEGER DEFAULT 0")
+        if 'job_type' not in job_columns:
+            migrations.append("ALTER TABLE research_jobs ADD COLUMN job_type VARCHAR(32) DEFAULT 'iaas'")
 
         # Migrate companies table
         company_columns = {col['name']: col for col in inspector.get_columns('companies')}
@@ -79,6 +81,9 @@ def init_db():
                 for migration in migrations:
                     logger.info(f"  - {migration}")
                     conn.execute(text(migration))
+                # Backfill job_type for existing rows
+                if 'job_type' in job_columns or any("job_type" in m for m in migrations):
+                    conn.execute(text("UPDATE research_jobs SET job_type='iaas' WHERE job_type IS NULL"))
                 conn.commit()
             logger.info("All migrations complete")
         else:
