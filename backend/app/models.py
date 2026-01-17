@@ -145,6 +145,16 @@ class Company(Base):
     tavily_validation_message = Column(Text, nullable=True)  # Validation result message
     tavily_formatted_results = Column(Text, nullable=True)  # Cached formatted results for LLM
 
+    # 2-Stage Pipeline Results
+    extraction_result = Column(JSON, nullable=True)  # Stage 1: Evidence extraction (Qwen 235B)
+    extraction_timestamp = Column(DateTime, nullable=True)  # When Stage 1 completed
+    classification_result = Column(JSON, nullable=True)  # Stage 2: Reasoning + classification (DeepSeek R1)
+    classification_timestamp = Column(DateTime, nullable=True)  # When Stage 2 completed
+    validation_result = Column(JSON, nullable=True)  # Stage 3: Programmatic validation
+    validation_timestamp = Column(DateTime, nullable=True)  # When Stage 3 completed
+    reasoning_trace = Column(Text, nullable=True)  # Stage 2 reasoning steps (JSON array as string)
+    needs_human_review = Column(Boolean, default=False)  # Flag for manual review
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     researched_at = Column(DateTime, nullable=True)

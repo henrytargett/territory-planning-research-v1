@@ -72,6 +72,24 @@ def init_db():
         if 'tavily_formatted_results' not in company_columns:
             migrations.append("ALTER TABLE companies ADD COLUMN tavily_formatted_results TEXT")
 
+        # 2-Stage Pipeline fields
+        if 'extraction_result' not in company_columns:
+            migrations.append("ALTER TABLE companies ADD COLUMN extraction_result JSON")
+        if 'extraction_timestamp' not in company_columns:
+            migrations.append("ALTER TABLE companies ADD COLUMN extraction_timestamp DATETIME")
+        if 'classification_result' not in company_columns:
+            migrations.append("ALTER TABLE companies ADD COLUMN classification_result JSON")
+        if 'classification_timestamp' not in company_columns:
+            migrations.append("ALTER TABLE companies ADD COLUMN classification_timestamp DATETIME")
+        if 'validation_result' not in company_columns:
+            migrations.append("ALTER TABLE companies ADD COLUMN validation_result JSON")
+        if 'validation_timestamp' not in company_columns:
+            migrations.append("ALTER TABLE companies ADD COLUMN validation_timestamp DATETIME")
+        if 'reasoning_trace' not in company_columns:
+            migrations.append("ALTER TABLE companies ADD COLUMN reasoning_trace TEXT")
+        if 'needs_human_review' not in company_columns:
+            migrations.append("ALTER TABLE companies ADD COLUMN needs_human_review INTEGER DEFAULT 0")
+
         # Execute migrations
         if migrations:
             logger.info(f"Running {len(migrations)} database migrations...")

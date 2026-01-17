@@ -10,8 +10,13 @@ from sqlalchemy.orm import Session
 from ..models import ResearchJob, Company, JobStatus, CompanyStatus
 from .search import get_search_service
 from .llm import get_llm_service
+from .extraction import ExtractionService
+from .reasoning import ReasoningService
+from .validation import ValidationService
+from ..config import get_settings
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
 class ResearchPipeline:
@@ -21,18 +26,30 @@ class ResearchPipeline:
         self.search_service = get_search_service()
         self.llm_service = get_llm_service()
         self._running_tasks: dict[int, asyncio.Task] = {}  # Track running tasks for proper cancellation
+
+        # 2-Stage Pipeline Services
+        self.extraction_service = ExtractionService()
+        self.reasoning_service = ReasoningService()
+        self.validation_service = ValidationService()
     
     async def process_company(self, company: Company, db: Session) -> bool:
         """
         Process a single company through the research pipeline.
-        
+
+        Routes to either single-stage or 2-stage pipeline based on config.
+
         Args:
             company: Company model instance
             db: Database session
-            
+
         Returns:
             True if successful, False otherwise
         """
+        # Route to 2-stage pipeline if enabled
+        if settings.enable_two_stage_pipeline:
+            return await self.process_company_two_stage(company, db)
+
+        # Otherwise, use legacy single-stage pipeline
         try:
             # Update status to researching
             company.status = CompanyStatus.RESEARCHING.value
@@ -86,7 +103,214 @@ class ResearchPipeline:
             company.error_message = str(e)
             db.commit()
             return False
-    
+
+    async def process_company_two_stage(self, company: Company, db: Session) -> bool:
+        """
+        Process a single company through the 2-stage research pipeline.
+
+        Pipeline:
+        1. Search (Tavily)
+        2. Stage 1: Evidence Extraction (Qwen 235B)
+        3. Stage 2: Reasoning & Classification (DeepSeek R1)
+        4. Stage 3: Programmatic Validation
+
+        Args:
+            company: Company model instance
+            db: Database session
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Update status to researching
+            company.status = CompanyStatus.RESEARCHING.value
+            db.commit()
+
+            logger.info(f"[2-STAGE] Starting research for: {company.name}")
+
+            # Step 1: Search for company information
+            search_results = await self.search_service.search_company(company.name)
+            company.search_results_raw = json.dumps(search_results.get("raw_response", {}))
+
+            # Store Tavily cost data
+            company.tavily_credits_used = search_results.get("credits_used", 0.0)
+            company.tavily_response_time = search_results.get("response_time")
+
+            if not search_results.get("success"):
+                company.status = CompanyStatus.FAILED.value
+                company.error_message = f"Search failed: {search_results.get('error', 'Unknown error')}"
+                db.commit()
+                return False
+
+            # Format search results for LLM
+            formatted_results = self.search_service.format_search_results_for_llm(search_results)
+
+            # Stage 1: Evidence Extraction (Qwen 235B)
+            extraction_result = await self.extraction_service.extract_evidence(
+                company_name=company.name,
+                search_results=formatted_results
+            )
+
+            if not extraction_result.get("success"):
+                company.status = CompanyStatus.FAILED.value
+                company.error_message = f"Stage 1 failed: {extraction_result.get('error', 'Unknown error')}"
+                db.commit()
+                return False
+
+            # Store Stage 1 results
+            extraction_data = extraction_result["extraction_result_raw"]
+            company.extraction_result = extraction_data
+            company.extraction_timestamp = datetime.utcnow()
+            db.commit()
+
+            logger.info(f"[2-STAGE] Stage 1 complete for {company.name}")
+
+            # Stage 2: Reasoning & Classification (DeepSeek R1)
+            classification_result = await self.reasoning_service.classify_company(
+                company_name=company.name,
+                extraction_result=extraction_result["extraction_result"]
+            )
+
+            if not classification_result.get("success"):
+                company.status = CompanyStatus.FAILED.value
+                company.error_message = f"Stage 2 failed: {classification_result.get('error', 'Unknown error')}"
+                db.commit()
+                return False
+
+            # Store Stage 2 results
+            classification_data = classification_result["classification_result_raw"]
+            company.classification_result = classification_data
+            company.classification_timestamp = datetime.utcnow()
+            company.reasoning_trace = json.dumps(
+                classification_result["classification_result"].reasoning_trace
+            )
+            db.commit()
+
+            logger.info(
+                f"[2-STAGE] Stage 2 complete for {company.name} - "
+                f"Tier {classification_result['classification_result'].classification.tier}"
+            )
+
+            # Stage 3: Programmatic Validation
+            validation_result = self.validation_service.validate_analysis(
+                company_name=company.name,
+                extraction=extraction_result["extraction_result"],
+                classification=classification_result["classification_result"]
+            )
+
+            # Store Stage 3 results
+            company.validation_result = validation_result.model_dump()
+            company.validation_timestamp = datetime.utcnow()
+            company.needs_human_review = validation_result.needs_human_review
+            db.commit()
+
+            logger.info(
+                f"[2-STAGE] Stage 3 complete for {company.name} - "
+                f"Valid: {validation_result.valid}, Issues: {len(validation_result.issues)}"
+            )
+
+            # Store final results in legacy fields for backward compatibility
+            self._store_two_stage_results(company, extraction_result, classification_result)
+
+            # Mark as completed
+            company.status = CompanyStatus.COMPLETED.value
+            company.researched_at = datetime.utcnow()
+
+            # Store combined token usage
+            company.llm_tokens_used = (
+                extraction_result.get("tokens_used", 0) +
+                classification_result.get("tokens_used", 0)
+            )
+            company.llm_response_time = (
+                extraction_result.get("response_time", 0) +
+                classification_result.get("response_time", 0)
+            )
+
+            db.commit()
+
+            tier = classification_result['classification_result'].classification.tier
+            score = classification_result['classification_result'].scores.total
+            logger.info(
+                f"[2-STAGE] ✓ Completed {company.name}: Tier {tier} ({score} pts) "
+                f"[Valid: {validation_result.valid}]"
+            )
+
+            return True
+
+        except Exception as e:
+            logger.error(f"[2-STAGE] Error processing {company.name}: {str(e)}", exc_info=True)
+            company.status = CompanyStatus.FAILED.value
+            company.error_message = str(e)
+            db.commit()
+            return False
+
+    def _store_two_stage_results(
+        self,
+        company: Company,
+        extraction_result: dict,
+        classification_result: dict
+    ):
+        """
+        Store 2-stage pipeline results in legacy fields for backward compatibility.
+
+        Maps the new 2-stage structure to the existing database fields.
+        """
+        extraction = extraction_result["extraction_result"]
+        classification = classification_result["classification_result"]
+
+        # Extract funding and employee data
+        funding = extraction.funding_operations.funding or "Unknown"
+        employees = extraction.funding_operations.employees or "Unknown"
+
+        # Map to research fields (best effort from extraction)
+        company.description = f"Company in managed inference tier {classification.classification.tier}"
+        company.employee_count = employees
+        company.total_funding = funding
+
+        # Extract funding in millions if possible
+        try:
+            if "M" in funding:
+                funding_millions = float(funding.replace("$", "").replace("M", "").strip())
+                company.funding_millions = funding_millions
+        except:
+            pass
+
+        # GPU Analysis (map from classification)
+        company.gpu_use_case_tier = classification.classification.tier
+        company.gpu_use_case_label = classification.classification.label
+        company.gpu_analysis_reasoning = "\n".join(classification.reasoning_trace)
+
+        # Positive/negative signals
+        positive_signals = (
+            extraction.managed_providers.explicit_mentions +
+            extraction.technical_architecture.inference_keywords +
+            extraction.scale_indicators.volume_signals
+        )
+        negative_signals = classification.conflicting_signals
+
+        company.signals_positive = json.dumps(positive_signals)
+        company.signals_negative = json.dumps(negative_signals)
+
+        # Scores
+        company.score_gpu_use_case = classification.scores.inference_scale
+        company.score_scale_budget = classification.scores.platform_adoption
+        company.score_growth_signals = classification.scores.growth_signals
+        company.score_confidence = classification.scores.confidence
+        company.score_total = classification.scores.total
+
+        # Priority tier (map from total score)
+        if classification.scores.total >= 70:
+            company.priority_tier = "HOT"
+        elif classification.scores.total >= 50:
+            company.priority_tier = "WARM"
+        elif classification.scores.total >= 30:
+            company.priority_tier = "WATCH"
+        else:
+            company.priority_tier = "COLD"
+
+        # Recommended action
+        company.recommended_action = f"Tier {classification.classification.tier} managed inference prospect"
+
     def _store_analysis_results(self, company: Company, analysis: dict):
         """Store analysis results in the company record."""
         research = analysis.get("research", {})
