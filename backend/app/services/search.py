@@ -68,16 +68,30 @@ class SearchService:
         Returns:
             dict with search results, usage stats, and cost information
         """
+        # Helper function to infer likely domain from company name
+        def infer_domain(name: str) -> str:
+            """Infer likely .com domain from company name for better search results."""
+            # Remove common suffixes and clean the name
+            clean_name = name.lower().strip()
+            clean_name = clean_name.replace(" ai", "").replace(" inc", "").replace(" inc.", "")
+            clean_name = clean_name.replace(",", "").replace(".", "")
+            # Remove spaces and create domain guess
+            domain_guess = clean_name.replace(" ", "").replace("-", "")
+            return f"{domain_guess}.com OR {domain_guess}.ai OR {domain_guess}.io"
+        
         # Craft a search query optimized for target type
+        # Add inferred domain to help Tavily find the specific company (not generic content)
+        domain_hint = infer_domain(company_name)
+        
         if target_type == "managed_inference":
             # BROAD query to find ANY company with AI features
-            # Use quotes around company name to ensure Tavily treats it as an entity, not keywords
+            # Include domain hint to prevent keyword confusion (e.g., "Read AI" → generic AI content)
             # Let the LLM identify managed inference signals from general AI content
-            query = f'"{company_name}" company AI features machine learning inference API deployment model serving'
+            query = f'"{company_name}" ({domain_hint}) company AI features machine learning inference API deployment'
         else:
             # Default: IaaS targets (GPU infrastructure)
             # Optimized: removed "startup" (excludes enterprises), added GPU-specific terms
-            query = f'"{company_name}" company GPU compute infrastructure machine learning training inference funding'
+            query = f'"{company_name}" ({domain_hint}) company GPU compute infrastructure machine learning funding'
 
         try:
             logger.info(f"Searching for: {company_name}")
