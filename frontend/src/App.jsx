@@ -14,7 +14,6 @@ import {
   Snowflake,
   Cpu,
   Building2,
-  DollarSign,
   Users,
   MapPin,
   Sparkles,
@@ -26,13 +25,6 @@ import {
 } from 'lucide-react'
 
 const API_BASE = '/api'
-
-// Helper function to format cost
-function formatCost(costUsd) {
-  if (!costUsd || costUsd === 0) return '$0.000'
-  if (costUsd < 0.001) return '< $0.001'
-  return `$${costUsd.toFixed(3)}`
-}
 
 // Helper function to format duration
 function formatDuration(seconds) {
@@ -206,20 +198,12 @@ function CompanyDetails({ company, targetType = 'iaas' }) {
               </div>
             </div>
 
-            {/* Cost & Performance */}
+            {/* Performance */}
             <div>
               <h4 style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Cost & Performance
+                Performance
               </h4>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-secondary)' }}>
-                    <DollarSign size={14} /> Tavily Cost
-                  </span>
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-primary)' }}>
-                    {formatCost(company.tavily_credits_used * 0.008)}
-                  </span>
-                </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-secondary)' }}>
                     <Clock size={14} /> Search Time
@@ -809,13 +793,6 @@ export default function App() {
                         <span>{job.completed_companies}/{job.total_companies} companies</span>
                         <span>{new Date(job.created_at).toLocaleDateString()}</span>
                       </div>
-
-                      {job.total_cost_usd > 0 && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, fontSize: 11, color: 'var(--text-muted)' }}>
-                          <DollarSign size={11} />
-                          <span style={{ fontFamily: 'var(--font-mono)' }}>{formatCost(job.total_cost_usd)}</span>
-                        </div>
-                      )}
                     </div>
                   ))}
                 </div>
@@ -860,12 +837,6 @@ export default function App() {
                         {jobDetails.submitted_by && (
                           <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>
                             Submitted by: <span style={{ color: 'var(--text-secondary)' }}>{jobDetails.submitted_by}</span>
-                          </p>
-                        )}
-                        {jobDetails.total_cost_usd > 0 && (
-                          <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>
-                            Total Cost: <span style={{ color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>{formatCost(jobDetails.total_cost_usd)}</span>
-                            {' '}({jobDetails.total_tavily_credits.toFixed(1)} credits)
                           </p>
                         )}
                       </div>
