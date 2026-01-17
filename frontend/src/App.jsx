@@ -499,6 +499,9 @@ export default function App() {
               ? 'AI-powered company research for managed inference reserved capacity targets.'
               : 'AI-powered company research and ranking for GPU infrastructure sales prospects.'}
           </p>
+          <p style={{ color: 'var(--text-muted)', maxWidth: 700, fontSize: 13, marginTop: 8 }}>
+            Cost is approximately $0.02 per company searched ($20 per thousand companies). Please use responsibly!
+          </p>
         </header>
 
         {/* Target Type Tabs */}
