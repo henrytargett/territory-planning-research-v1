@@ -71,12 +71,13 @@ class SearchService:
         # Craft a search query optimized for target type
         if target_type == "managed_inference":
             # BROAD query to find ANY company with AI features
+            # Use quotes around company name to ensure Tavily treats it as an entity, not keywords
             # Let the LLM identify managed inference signals from general AI content
-            query = f"{company_name} AI features machine learning inference API deployment model serving scale"
+            query = f'"{company_name}" company AI features machine learning inference API deployment model serving'
         else:
             # Default: IaaS targets (GPU infrastructure)
             # Optimized: removed "startup" (excludes enterprises), added GPU-specific terms
-            query = f"{company_name} GPU compute infrastructure machine learning training inference funding employees"
+            query = f'"{company_name}" company GPU compute infrastructure machine learning training inference funding'
 
         try:
             logger.info(f"Searching for: {company_name}")
